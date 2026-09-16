@@ -9,7 +9,25 @@
     v1.6.66  |  2026-08-31 3:10PM |  Roblox UI Library for scripts
     
     To view the source code, see the `src/` folder on the official GitHub repository.
-    
+
+    CHANGELOG:
+     v1.0.3:
+     • [-] Optimized as:Refresh Function
+     • [-] Fixed DarkLua Functions
+     • [+] Added Button Elements On Notify
+     v1.0.4:
+     • [-] Fixed Button On Notify Color Now Uses WindUI Default LOL
+     • [-] Fixed Some Bug Functions
+     • [+] Added Color Features On Button Elements On Notify
+     • [+] Can Now Use Theme To Chnage Notify Button Color
+     v1.0.5:
+     • [-] Optimized Gradient Function
+     • [+] Added Button Type On Notify (Default: Button, Optional: Underline | Requested By: @.sxmple_)
+     v1.0.6:
+     • [-] Fixed HubCard Scrim Duplicate Error
+     • [-] Fixed Some Bug Functions
+     • [+] Added ImageBlur On Window Background Image
+
     Author: Footagesus (Footages, .ftgs, oftgs)
     Modded Author: Mizumaru (miz, mizumaruu, Mizu)
 
