@@ -16,7 +16,7 @@ local Window = WindUI:CreateWindow({
     Title = "WindUI Library Modded",
     ImageBlur = true,
     Author = "MZXHUB",
-    Version = "WindUI Modded | v1.0.2",
+    Version = "WindUI Modded | v1.0.6",
     Icon = "rbxassetid://120466921396914",
     Background = "https://raw.githubusercontent.com/mizcanscripts/MZX/refs/heads/main/images/mzx_background4.png",
  	--NewElements = true,
@@ -47,7 +47,7 @@ local Window = WindUI:CreateWindow({
 
 
 Window:Tag({
-    Title = "v1.0.2",
+    Title = "v1.0.6",
     Color = Color3.fromHex("#315dff"),
     LightSweep = true,
 })
