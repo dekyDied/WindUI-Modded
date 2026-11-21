@@ -24,36 +24,47 @@ local function ParseInvite(invite)
 	return text:match("discord%.gg/([%w%-_]+)") or text:match("discord%.com/invite/([%w%-_]+)") or text
 end
 
--- Downloads an image, shows it on the label and deletes the saved file
--- as soon as Roblox has finished loading it (so nothing is left on disk).
-local function ApplyImage(Label, Url, FileName)
-	local Request = Creator.Request
-	if not (Request and writefile and getcustomasset) then
+-- Creates every missing folder of a path like "WindUI/Lotus Menu/assets"
+local function EnsureFolder(path)
+	if not (isfolder and makefolder) then
 		return
 	end
 
-	local requested, response = pcall(Request, { Url = Url, Method = "GET" })
-	if not requested or not response or response.StatusCode ~= 200 then
+	local current = ""
+	for part in path:gmatch("[^/]+") do
+		current = current == "" and part or (current .. "/" .. part)
+		if not isfolder(current) then
+			pcall(makefolder, current)
+		end
+	end
+end
+
+-- Shows an image from a URL on a label. The image is saved in the assets folder and
+-- reused next time (the file name has the image hash, so a new icon is downloaded again).
+local function ApplyImage(Label, Url, FilePath)
+	if not (writefile and getcustomasset) then
 		return
 	end
 
-	if not pcall(writefile, FileName, response.Body) then
-		return
-	end
+	if not (isfile and isfile(FilePath)) then
+		local Request = Creator.Request
+		if not Request then
+			return
+		end
 
-	local gotAsset, asset = pcall(getcustomasset, FileName)
-	if gotAsset and asset and Label.Parent then
-		Label.Image = asset
+		local requested, response = pcall(Request, { Url = Url, Method = "GET" })
+		if not requested or not response or response.StatusCode ~= 200 then
+			return
+		end
 
-		-- wait until the image is really loaded (max 10s) before deleting its file
-		local startedAt = os.clock()
-		while Label.Parent and not Label.IsLoaded and os.clock() - startedAt < 10 do
-			task.wait(0.1)
+		if not pcall(writefile, FilePath, response.Body) then
+			return
 		end
 	end
 
-	if delfile then
-		pcall(delfile, FileName)
+	local gotAsset, asset = pcall(getcustomasset, FilePath)
+	if gotAsset and asset and Label.Parent then
+		Label.Image = asset
 	end
 end
 
@@ -70,6 +81,10 @@ function Element:New(Config)
 		ShowCounts = Config.ShowCounts ~= false,
 		Radius = Config.Radius or 14,
 	}
+
+	-- images are saved in WindUI/<Window.Folder>/assets (e.g. WindUI/Lotus Menu/assets)
+	local AssetsPath = "WindUI/" .. tostring(Config.Window.Folder or "Temp") .. "/assets"
+	EnsureFolder(AssetsPath)
 
 	local RefreshId = 0
 	local Destroyed = false
@@ -424,13 +439,13 @@ function Element:New(Config)
 				OnlineLabel.Text = ""
 			end
 
-			-- images are downloaded in the background and their files are deleted after use
+			-- images load in the background and are saved in the assets folder
 			if guild.icon then
 				task.spawn(
 					ApplyImage,
 					IconImage,
 					"https://cdn.discordapp.com/icons/" .. guild.id .. "/" .. guild.icon .. ".png?size=128",
-					"DiscordCard_" .. guild.id .. "_icon.png"
+					AssetsPath .. "/DiscordCard_" .. guild.id .. "_icon_" .. guild.icon .. ".png"
 				)
 			end
 
@@ -439,7 +454,7 @@ function Element:New(Config)
 					ApplyImage,
 					BannerImage,
 					"https://cdn.discordapp.com/banners/" .. guild.id .. "/" .. guild.banner .. ".png?size=480",
-					"DiscordCard_" .. guild.id .. "_banner.png"
+					AssetsPath .. "/DiscordCard_" .. guild.id .. "_banner_" .. guild.banner .. ".png"
 				)
 			end
 		end)
