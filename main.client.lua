@@ -25,7 +25,7 @@ do
 			WindUI = require(cloneref(ReplicatedStorage:WaitForChild("WindUI"):WaitForChild("Init")))
 		else
 			WindUI =
-				loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+				loadstring(game:HttpGet("https://raw.githubusercontent.com/dekyDied/WindUI-Modded/refs/heads/main/dist/main.lua"))()
 		end
 	end
 end
