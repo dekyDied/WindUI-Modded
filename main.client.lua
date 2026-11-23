@@ -99,7 +99,7 @@ local Window = WindUI:CreateWindow({
 	Topbar = {
 		Height = 44,
 		ButtonsType = "Mac", -- Default or Mac
-		Alignment = "Left", -- Left or Right (only for the Mac buttons)
+		Alignment = "Right", -- Left or Right (only for the Mac buttons)
 	},
 })
 
