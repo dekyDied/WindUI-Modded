@@ -2,6 +2,7 @@
 
 ## Changelog
 
+- added `Topbar.Alignment: "Left" | "Right"` to [Window](https://footagesus.github.io/treehub-web/docs/windui/window): places the Mac-style buttons (`ButtonsType = "Mac"`) on the left (default) or on the right of the window
 - added `CodeSize: number`, `CodeTheme: table`, `CanCopied: boolean` and `Height: UDim` to [Code](https://footagesus.github.io/treehub-web/docs/windui/code) element (#91)
 - changed PandaDev API url in [Key System](https://footagesus.github.io/treehub-web/docs/windui/keysystem) (#92)
 - fixed [Section](https://footagesus.github.io/treehub-web/docs/windui/sections) bg (in custom themes)
