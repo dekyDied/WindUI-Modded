@@ -37558,6 +37558,11 @@ if aw.Topbar=={}then
 aw.Topbar={Height=52,ButtonsType="Default"}
 end
 
+-- Topbar.Alignment ("Left" or "Right"): side of the window where the Mac-style buttons go.
+-- The Default (Windows) style always stays on the right.
+aw.ButtonsOnRight=aw.Topbar.ButtonsType=="Default"
+or string.lower(tostring(aw.Topbar.Alignment or""))=="right"
+
 if not ai:IsStudio()and aw.Folder and writefile then
 if not isfolder("WindUI/"..aw.Folder)then
 makefolder("WindUI/"..aw.Folder)
@@ -38423,8 +38428,8 @@ Padding=UDim.new(0,aw.UIPadding/2),
 ao("Frame",{
 AutomaticSize="XY",
 BackgroundTransparency=1,
-Position=UDim2.new(aw.Topbar.ButtonsType=="Default"and 1 or 0,0,0.5,0),
-AnchorPoint=Vector2.new(aw.Topbar.ButtonsType=="Default"and 1 or 0,0.5),
+Position=UDim2.new(aw.ButtonsOnRight and 1 or 0,0,0.5,0),
+AnchorPoint=Vector2.new(aw.ButtonsOnRight and 1 or 0,0.5),
 Name="Right",
 },{
 ao("UIListLayout",{
@@ -38437,7 +38442,7 @@ ao("UIPadding",{
 PaddingTop=UDim.new(0,aw.UIPadding),
 PaddingLeft=UDim.new(
 0,
-aw.Topbar.ButtonsType=="Default"and aw.UIPadding or aw.UIPadding-2
+aw.ButtonsOnRight and aw.UIPadding or aw.UIPadding-2
 ),
 PaddingRight=UDim.new(0,8),
 PaddingBottom=UDim.new(0,aw.UIPadding),
@@ -38452,7 +38457,7 @@ local A=aw.UIElements.Main.Main.Topbar.Right.UIListLayout.AbsoluteContentSize.X
 /av.WindUI.UIScale
 
 z=aw.UIElements.Main.Main.Topbar.Left.AbsoluteSize.X/av.WindUI.UIScale
-if aw.Topbar.ButtonsType~="Default"then
+if not aw.ButtonsOnRight then
 z=z+A+aw.UIPadding-4
 end
 
@@ -38462,13 +38467,13 @@ aw.UIElements.Main.Main.Topbar.Center.Size=UDim2.new(
 1,
 -z
 -(aw.UIPadding/av.WindUI.UIScale)
--(aw.Topbar.ButtonsType=="Default"and A+aw.UIPadding or 0),
+-(aw.ButtonsOnRight and A+aw.UIPadding or 0),
 1,
 0
 )
 end)
 
-if aw.Topbar.ButtonsType~="Default"then
+if not aw.ButtonsOnRight then
 an.AddSignal(aw.UIElements.Main.Main.Topbar.Right:GetPropertyChangedSignal"AbsoluteSize",function()
 aw.UIElements.Main.Main.Topbar.Left.Position=UDim2.new(
 0,
