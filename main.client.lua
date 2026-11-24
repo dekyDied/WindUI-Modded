@@ -1163,6 +1163,9 @@ do
 		Invite = "https://discord.gg/" .. InviteCode, -- or just the code
 		ButtonText = "Join",
 		ShowBanner = true,
+		BannerHeight = 130, -- full-width banner at the top of the card
+		IconShape = "Rounded", -- Rounded, Circle or Square
+		IconSize = 48,
 		ShowBadges = true, -- Verified / Partnered / Community / Boosts
 		ShowDescription = true, -- server description under the counters
 		ShowCopyButton = true, -- small "copy link" button next to Join
