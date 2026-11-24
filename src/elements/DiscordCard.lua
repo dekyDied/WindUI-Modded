@@ -1,482 +1,302 @@
-local cloneref = (cloneref or clonereference or function(instance)
-	return instance
-end)
-
-local HttpService = cloneref(game:GetService("HttpService"))
-
 local Creator = require("../modules/Creator")
 local New = Creator.New
+local NewRoundFrame = Creator.NewRoundFrame
+local Tween = Creator.Tween
+
+local HttpService = game:GetService("HttpService")
+
+local SetClipboard = setclipboard or toclipboard or set_clipboard
 
 local Element = {}
 
-local function GetFont(weight)
-	return Font.new(Creator.Font, weight)
+local BLURPLE = Color3.fromRGB(88, 101, 242)
+local BLURPLE_HOVER = Color3.fromRGB(71, 82, 196)
+
+-- Accepts a bare code ("abc123"), "discord.gg/abc123", "dsc.gg/abc123"
+-- or "https://discord.com/invite/abc123" and returns just the code.
+local function ParseInviteCode(invite)
+	if typeof(invite) ~= "string" then
+		return nil
+	end
+
+	invite = invite:gsub("%s+", "")
+
+	return invite:match("discord%.gg/([%w%-_]+)")
+		or invite:match("discord%.com/invite/([%w%-_]+)")
+		or invite:match("discordapp%.com/invite/([%w%-_]+)")
+		or invite:match("dsc%.gg/([%w%-_]+)")
+		or invite:match("^([%w%-_]+)$")
 end
 
+-- 12345 -> "12,345"
 local function FormatNumber(number)
-	local reversed = tostring(math.floor(number)):reverse():gsub("(%d%d%d)", "%1,")
-	return (reversed:reverse():gsub("^,", ""))
+	local text = tostring(math.floor(tonumber(number) or 0))
+	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	return (formatted:gsub("^,", ""))
 end
 
--- Accepts "abc123", "discord.gg/abc123" or "https://discord.com/invite/abc123"
-local function ParseInvite(invite)
-	local text = tostring(invite or "")
-	return text:match("discord%.gg/([%w%-_]+)") or text:match("discord%.com/invite/([%w%-_]+)") or text
+-- Asks the public Discord API about the invite (name, icon, banner, member counts).
+local function FetchInvite(code)
+	if not Creator.Request then
+		return nil, "Your executor does not support HTTP requests."
+	end
+
+	local requestOk, response = pcall(Creator.Request, {
+		Url = "https://discord.com/api/v10/invites/" .. code .. "?with_counts=true",
+		Method = "GET",
+	})
+
+	if not requestOk or typeof(response) ~= "table" or not response.Body then
+		return nil, "Could not reach Discord."
+	end
+
+	if response.StatusCode and response.StatusCode ~= 200 then
+		return nil, "Invite invalid or expired."
+	end
+
+	local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, response.Body)
+	if not decodeOk or typeof(data) ~= "table" or typeof(data.guild) ~= "table" then
+		return nil, "Could not read the server info."
+	end
+
+	return data
 end
 
--- Creates every missing folder of a path like "WindUI/Lotus Menu/assets"
-local function EnsureFolder(path)
-	if not (isfolder and makefolder) then
-		return
+-- If the Discord desktop app is open, this makes it show the "Join server" prompt.
+-- Returns true when the app accepted the request.
+local function OpenInDiscordApp(code)
+	if not Creator.Request then
+		return false
 	end
 
-	local current = ""
-	for part in path:gmatch("[^/]+") do
-		current = current == "" and part or (current .. "/" .. part)
-		if not isfolder(current) then
-			pcall(makefolder, current)
-		end
-	end
-end
+	local requestOk, response = pcall(Creator.Request, {
+		Url = "http://127.0.0.1:6463/rpc?v=1",
+		Method = "POST",
+		Headers = {
+			["Content-Type"] = "application/json",
+			["Origin"] = "https://discord.com",
+		},
+		Body = HttpService:JSONEncode({
+			cmd = "INVITE_BROWSER",
+			args = { code = code },
+			nonce = HttpService:GenerateGUID(false),
+		}),
+	})
 
--- Shows an image from a URL on a label. The image is saved in the assets folder and
--- reused next time (the file name has the image hash, so a new icon is downloaded again).
-local function ApplyImage(Label, Url, FilePath)
-	if not (writefile and getcustomasset) then
-		return
-	end
-
-	if not (isfile and isfile(FilePath)) then
-		local Request = Creator.Request
-		if not Request then
-			return
-		end
-
-		local requested, response = pcall(Request, { Url = Url, Method = "GET" })
-		if not requested or not response or response.StatusCode ~= 200 then
-			return
-		end
-
-		if not pcall(writefile, FilePath, response.Body) then
-			return
-		end
-	end
-
-	local gotAsset, asset = pcall(getcustomasset, FilePath)
-	if gotAsset and asset and Label.Parent then
-		Label.Image = asset
-	end
+	return requestOk and typeof(response) == "table" and (response.Success == true or response.StatusCode == 200)
 end
 
 function Element:New(Config)
-	local WindUI = Config.WindUI
-
-	local DiscordCardModule = {
+	local DiscordCard = {
 		__type = "DiscordCard",
-		Invite = ParseInvite(Config.Invite),
-		Title = Config.Title,
-		Desc = Config.Desc or Config.Description,
-		JoinText = Config.JoinText or "Join Server",
-		CopyText = Config.CopyText or "Copy Invite",
-		ShowCounts = Config.ShowCounts ~= false,
-		Radius = Config.Radius or 14,
+		Invite = Config.Invite,
+		Code = ParseInviteCode(Config.Invite),
+		Title = Config.Title or "Discord Server",
+		Desc = Config.Desc or "Loading server info...",
+		ButtonText = Config.ButtonText or "Join",
+		ShowBanner = Config.ShowBanner ~= false,
+		BannerHeight = Config.BannerHeight or 100,
+		IconSize = Config.IconSize or 44,
+		IconRounded = Config.IconRounded ~= false,
+		Callback = Config.Callback or function() end,
+		Data = nil,
+		UIElements = {},
 	}
 
-	-- images are saved in WindUI/<Window.Folder>/assets (e.g. WindUI/Lotus Menu/assets)
-	local AssetsPath = "WindUI/" .. tostring(Config.Window.Folder or "Temp") .. "/assets"
-	EnsureFolder(AssetsPath)
-
-	local RefreshId = 0
-	local Destroyed = false
-
-	local function Notify(icon, content, duration)
-		if WindUI and WindUI.Notify then
-			WindUI:Notify({
-				Icon = icon,
-				Title = "Discord",
-				Content = content,
-				Duration = duration or 3,
-			})
-		end
-	end
-
-	local function GetLink()
-		return "https://discord.gg/" .. DiscordCardModule.Invite
-	end
-
-	local function CopyInvite()
-		if setclipboard then
-			setclipboard(GetLink())
-			Notify("copy", "Invite link copied!")
-		else
-			Notify("triangle-alert", "Your executor can't copy to the clipboard. Invite: " .. GetLink(), 6)
-		end
-	end
-
-	-- Asks the Discord desktop app (if it is open) to show the invite.
-	-- If that doesn't work, it falls back to copying the link.
-	local function JoinServer()
-		local Request = Creator.Request
-		if Request then
-			local sent, response = pcall(Request, {
-				Url = "http://127.0.0.1:6463/rpc?v=1",
-				Method = "POST",
-				Headers = {
-					["Content-Type"] = "application/json",
-					["Origin"] = "https://discord.com",
-				},
-				Body = HttpService:JSONEncode({
-					cmd = "INVITE_BROWSER",
-					nonce = HttpService:GenerateGUID(false),
-					args = { code = DiscordCardModule.Invite },
-				}),
-			})
-			if sent and response and response.StatusCode == 200 then
-				Notify("geist:logo-discord", "Check your Discord app to join!")
-				return
-			end
-		end
-		CopyInvite()
-	end
-
-	------------------------------------------------------------
-	-- Building the card
-	------------------------------------------------------------
-	local function Label(props)
-		props.BackgroundTransparency = 1
-		props.TextXAlignment = Enum.TextXAlignment.Left
-		props.ThemeTag = props.ThemeTag or { TextColor3 = "Text" }
-		return New("TextLabel", props)
-	end
-
-	local function Dot(color)
-		return New("Frame", {
-			Size = UDim2.fromOffset(8, 8),
-			BackgroundColor3 = color,
-			BorderSizePixel = 0,
-		}, {
-			New("UICorner", { CornerRadius = UDim.new(1, 0) }),
-		})
-	end
-
-	-- The banner image is taller than its holder and the holder clips it, so only the
-	-- top corners stay rounded (the rounded bottom corners are cut off).
-	local BannerImage = New("ImageLabel", {
-		Name = "Banner",
-		Size = UDim2.new(1, 0, 0, 80),
-		BorderSizePixel = 0,
-		ScaleType = Enum.ScaleType.Crop,
-		Image = "",
-		ThemeTag = { BackgroundColor3 = "Accent" },
-	}, {
-		New("UICorner", { CornerRadius = UDim.new(0, DiscordCardModule.Radius) }),
-		-- soft fade: fully visible at the top, blending into the card at the bottom
-		New("UIGradient", {
-			Rotation = 90,
-			Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0),
-				NumberSequenceKeypoint.new(0.6, 0.15),
-				NumberSequenceKeypoint.new(1, 0.75),
-			}),
-		}),
-	})
-
-	local BannerHolder = New("Frame", {
-		Name = "BannerHolder",
-		Size = UDim2.new(1, 0, 0, 64),
-		BackgroundTransparency = 1,
-		ClipsDescendants = true,
-		LayoutOrder = 1,
-	}, {
-		BannerImage,
-	})
-
-	local IconImage = New("ImageLabel", {
-		Name = "Icon",
-		Size = UDim2.fromOffset(56, 56),
-		BorderSizePixel = 0,
-		Image = "",
-		LayoutOrder = 1,
-		ThemeTag = { BackgroundColor3 = "Accent" },
-	}, {
-		New("UICorner", { CornerRadius = UDim.new(1, 0) }),
-	})
-
-	local NameLabel = Label({
-		Name = "ServerName",
-		Size = UDim2.new(1, 0, 0, 22),
-		Text = DiscordCardModule.Title or "Discord Server",
-		TextSize = 17,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		FontFace = GetFont(Enum.FontWeight.Bold),
-		LayoutOrder = 1,
-	})
-
-	local OnlineLabel = Label({
-		Size = UDim2.new(0, 0, 1, 0),
-		AutomaticSize = Enum.AutomaticSize.X,
-		Text = "Loading...",
-		TextSize = 13,
-		TextTransparency = 0.25,
-		FontFace = GetFont(Enum.FontWeight.Medium),
-		LayoutOrder = 2,
-	})
-
-	local MembersLabel = Label({
-		Size = UDim2.new(0, 0, 1, 0),
-		AutomaticSize = Enum.AutomaticSize.X,
-		Text = "",
-		TextSize = 13,
-		TextTransparency = 0.25,
-		FontFace = GetFont(Enum.FontWeight.Medium),
-		LayoutOrder = 4,
-	})
-
-	local OnlineDot = Dot(Color3.fromRGB(35, 165, 90))
-	OnlineDot.LayoutOrder = 1
-	OnlineDot.Visible = false
-
-	local MemberDot = Dot(Color3.fromRGB(148, 155, 164))
-	MemberDot.LayoutOrder = 3
-	MemberDot.Visible = false
-
-	local StatusRow = New("Frame", {
-		Name = "Status",
-		Size = UDim2.new(1, 0, 0, 16),
-		BackgroundTransparency = 1,
-		LayoutOrder = 2,
-	}, {
-		New("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			VerticalAlignment = Enum.VerticalAlignment.Center,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(0, 6),
-		}),
-		OnlineDot,
-		OnlineLabel,
-		MemberDot,
-		MembersLabel,
-	})
-
-	local InfoColumn = New("Frame", {
-		Name = "Info",
-		Size = UDim2.new(1, -68, 1, 0),
-		BackgroundTransparency = 1,
-		LayoutOrder = 2,
-	}, {
-		New("UIListLayout", {
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			VerticalAlignment = Enum.VerticalAlignment.Center,
-			Padding = UDim.new(0, 4),
-		}),
-		NameLabel,
-		StatusRow,
-	})
-
-	local Header = New("Frame", {
-		Name = "Header",
-		Size = UDim2.new(1, 0, 0, 56),
-		BackgroundTransparency = 1,
-		LayoutOrder = 1,
-	}, {
-		New("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			VerticalAlignment = Enum.VerticalAlignment.Center,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(0, 12),
-		}),
-		IconImage,
-		InfoColumn,
-	})
-
-	local DescriptionLabel = Label({
-		Name = "Description",
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		Text = DiscordCardModule.Desc or "",
-		TextSize = 13,
-		TextWrapped = true,
-		TextTransparency = 0.35,
-		FontFace = GetFont(Enum.FontWeight.Regular),
-		Visible = (DiscordCardModule.Desc or "") ~= "",
-		LayoutOrder = 2,
-	})
-
-	local function MakeButton(text, order, width, callback, primary)
-		local Button = New("TextButton", {
-			Size = UDim2.new(width, -4, 1, 0),
-			BorderSizePixel = 0,
-			AutoButtonColor = false,
-			Text = text,
-			TextSize = 14,
-			FontFace = GetFont(Enum.FontWeight.SemiBold),
-			LayoutOrder = order,
-			BackgroundTransparency = primary and 0 or 0.9,
-			TextColor3 = primary and Color3.fromRGB(255, 255, 255) or nil,
-			ThemeTag = primary and { BackgroundColor3 = "Button" }
-				or { BackgroundColor3 = "Text", TextColor3 = "Text" },
-		}, {
-			New("UICorner", { CornerRadius = UDim.new(0, 8) }),
-		})
-		Button.MouseButton1Click:Connect(callback)
-		return Button
-	end
-
-	local ButtonsRow = New("Frame", {
-		Name = "Buttons",
-		Size = UDim2.new(1, 0, 0, 36),
-		BackgroundTransparency = 1,
-		LayoutOrder = 3,
-	}, {
-		New("UIListLayout", {
-			FillDirection = Enum.FillDirection.Horizontal,
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(0, 8),
-		}),
-		MakeButton(DiscordCardModule.JoinText, 1, 0.62, JoinServer, true),
-		MakeButton(DiscordCardModule.CopyText, 2, 0.38, CopyInvite, false),
-	})
-
-	local Body = New("Frame", {
-		Name = "Body",
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		BackgroundTransparency = 1,
-		LayoutOrder = 2,
-	}, {
-		New("UIPadding", {
-			PaddingTop = UDim.new(0, 14),
-			PaddingBottom = UDim.new(0, 14),
-			PaddingLeft = UDim.new(0, 14),
-			PaddingRight = UDim.new(0, 14),
-		}),
-		New("UIListLayout", {
-			SortOrder = Enum.SortOrder.LayoutOrder,
-			Padding = UDim.new(0, 10),
-		}),
-		Header,
-		DescriptionLabel,
-		ButtonsRow,
-	})
-
-	local Card = New("Frame", {
-		Name = "DiscordCard",
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = Enum.AutomaticSize.Y,
-		ClipsDescendants = true,
-		BorderSizePixel = 0,
+	local Frame = require("../components/window/Element")({
+		Title = DiscordCard.Title,
+		Desc = DiscordCard.Desc,
 		Parent = Config.Parent,
-		ThemeTag = {
-			BackgroundColor3 = "ElementBackground",
-			BackgroundTransparency = "ElementBackgroundTransparency",
-		},
-	}, {
-		New("UICorner", { CornerRadius = UDim.new(0, DiscordCardModule.Radius) }),
-		New("UIStroke", {
-			Thickness = 1,
-			Transparency = 0.9,
-			ThemeTag = { Color = "Text" },
-		}),
-		New("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }),
-		BannerHolder,
-		Body,
+		Window = Config.Window,
+		Hover = false,
+		TextOffset = 0,
+		Justify = "Between",
+		Tab = Config.Tab,
+		Index = Config.Index,
+		ElementTable = DiscordCard,
+		ParentConfig = Config,
+		Size = Config.Size,
+		Tags = Config.Tags,
+		ThumbnailSize = DiscordCard.BannerHeight,
 	})
 
-	DiscordCardModule.Card = Card
+	DiscordCard.DiscordCardFrame = Frame
 
-	------------------------------------------------------------
-	-- Filling the card with real server data
-	------------------------------------------------------------
-	function DiscordCardModule:Refresh()
-		RefreshId = RefreshId + 1
-		local Id = RefreshId
+	-- Row layout: [icon] [title + desc] [join button]
+	local Padding = Config.Window.ElementConfig.UIPadding
+	local TitleRow = Frame.UIElements.Container.TitleFrame
+	local TextFrame = TitleRow.TitleFrame
+
+	local IconSize = DiscordCard.IconSize
+	local ButtonWidth = math.max(72, #DiscordCard.ButtonText * 9 + 40)
+	local IconCorner = DiscordCard.IconRounded and 999 or 10
+
+	local IconHolder = New("Frame", {
+		Name = "IconHolder",
+		Size = UDim2.new(0, IconSize, 0, IconSize),
+		BackgroundColor3 = BLURPLE,
+		BackgroundTransparency = 0.85,
+		LayoutOrder = -99,
+		Parent = TitleRow,
+	}, {
+		New("UICorner", {
+			CornerRadius = UDim.new(0, IconCorner),
+		}),
+	})
+
+	-- The text takes whatever space is left between the icon and the button.
+	TextFrame.Size = UDim2.new(1, -(IconSize + ButtonWidth + Padding * 2), 1, 0)
+
+	local JoinFill = NewRoundFrame(10, "Squircle", {
+		Name = "Fill",
+		ImageColor3 = BLURPLE,
+		Size = UDim2.new(1, 0, 1, 0),
+	})
+
+	local JoinButton = New("TextButton", {
+		Name = "JoinButton",
+		Size = UDim2.new(0, ButtonWidth, 0, 34),
+		BackgroundTransparency = 1,
+		Text = "",
+		LayoutOrder = 99,
+		Parent = TitleRow,
+	}, {
+		JoinFill,
+		New("TextLabel", {
+			Size = UDim2.new(1, 0, 1, 0),
+			BackgroundTransparency = 1,
+			Text = DiscordCard.ButtonText,
+			TextColor3 = Color3.new(1, 1, 1),
+			TextSize = 16,
+			FontFace = Font.new(Creator.Font, Enum.FontWeight.SemiBold),
+		}),
+	})
+
+	DiscordCard.UIElements.IconHolder = IconHolder
+	DiscordCard.UIElements.JoinButton = JoinButton
+
+	Creator.AddSignal(JoinButton.MouseEnter, function()
+		Tween(JoinFill, 0.1, { ImageColor3 = BLURPLE_HOVER }):Play()
+	end)
+	Creator.AddSignal(JoinButton.MouseLeave, function()
+		Tween(JoinFill, 0.1, { ImageColor3 = BLURPLE }):Play()
+	end)
+
+	-- Join: try the Discord app first, otherwise copy the invite link.
+	function DiscordCard:Join()
+		if not DiscordCard.Code then
+			return false
+		end
 
 		task.spawn(function()
-			local Request = Creator.Request
-			if not Request then
-				OnlineLabel.Text = "Server info unavailable"
-				return
-			end
+			local link = "https://discord.gg/" .. DiscordCard.Code
+			local openedApp = OpenInDiscordApp(DiscordCard.Code)
+			local message
 
-			local requested, response = pcall(Request, {
-				Url = "https://discord.com/api/v9/invites/" .. DiscordCardModule.Invite .. "?with_counts=true",
-				Method = "GET",
-			})
-
-			-- the card was destroyed or another refresh started while we were waiting
-			if Destroyed or Id ~= RefreshId then
-				return
-			end
-
-			if not requested or not response or response.StatusCode ~= 200 then
-				OnlineLabel.Text = "Invite not found"
-				return
-			end
-
-			local parsed, data = pcall(function()
-				return HttpService:JSONDecode(response.Body)
-			end)
-			if not parsed or type(data) ~= "table" or not data.guild then
-				OnlineLabel.Text = "Invite not found"
-				return
-			end
-
-			local guild = data.guild
-			NameLabel.Text = DiscordCardModule.Title or guild.name
-
-			local description = DiscordCardModule.Desc or guild.description
-			if description and description ~= "" then
-				DescriptionLabel.Text = description
-				DescriptionLabel.Visible = true
-			end
-
-			if DiscordCardModule.ShowCounts and data.approximate_member_count then
-				OnlineDot.Visible = true
-				MemberDot.Visible = true
-				OnlineLabel.Text = FormatNumber(data.approximate_presence_count or 0) .. " Online"
-				MembersLabel.Text = FormatNumber(data.approximate_member_count) .. " Members"
+			if openedApp then
+				message = "Check your Discord app to accept the invite."
+			elseif SetClipboard then
+				pcall(SetClipboard, link)
+				message = "Invite link copied to your clipboard."
 			else
-				OnlineLabel.Text = ""
+				message = link
 			end
 
-			-- images load in the background and are saved in the assets folder
-			if guild.icon then
-				task.spawn(
-					ApplyImage,
-					IconImage,
-					"https://cdn.discordapp.com/icons/" .. guild.id .. "/" .. guild.icon .. ".png?size=128",
-					AssetsPath .. "/DiscordCard_" .. guild.id .. "_icon_" .. guild.icon .. ".png"
-				)
+			pcall(function()
+				Config.WindUI:Notify({
+					Title = DiscordCard.Title,
+					Content = message,
+					Duration = 4,
+					Icon = "link",
+				})
+			end)
+
+			Creator.SafeCallback(DiscordCard.Callback, DiscordCard.Data, openedApp)
+		end)
+
+		return true
+	end
+
+	Creator.AddSignal(JoinButton.MouseButton1Click, function()
+		DiscordCard:Join()
+	end)
+
+	local function ApplyData(data)
+		local guild = data.guild
+		DiscordCard.Data = data
+
+		if not Config.Title then
+			DiscordCard.Title = guild.name
+			Frame:SetTitle(guild.name)
+		end
+
+		if not Config.Desc then
+			local parts = {}
+			local online = tonumber(data.approximate_presence_count)
+			local members = tonumber(data.approximate_member_count)
+
+			if online then
+				table.insert(parts, FormatNumber(online) .. " online")
+			end
+			if members then
+				table.insert(parts, FormatNumber(members) .. " members")
 			end
 
+			Frame:SetDesc(#parts > 0 and table.concat(parts, "  •  ") or guild.description)
+		end
+
+		if guild.icon then
+			local IconImage = Creator.Image(
+				("https://cdn.discordapp.com/icons/%s/%s.png?size=128"):format(guild.id, guild.icon),
+				"discord-icon-" .. tostring(guild.id),
+				IconCorner,
+				Config.Window.Folder,
+				"Image",
+				false
+			)
+			IconImage.Size = UDim2.new(1, 0, 1, 0)
+			IconImage.Parent = IconHolder
+		end
+
+		if DiscordCard.ShowBanner then
+			local bannerUrl
 			if guild.banner then
-				task.spawn(
-					ApplyImage,
-					BannerImage,
-					"https://cdn.discordapp.com/banners/" .. guild.id .. "/" .. guild.banner .. ".png?size=480",
-					AssetsPath .. "/DiscordCard_" .. guild.id .. "_banner_" .. guild.banner .. ".png"
-				)
+				bannerUrl = ("https://cdn.discordapp.com/banners/%s/%s.png?size=600"):format(guild.id, guild.banner)
+			elseif guild.splash then
+				bannerUrl = ("https://cdn.discordapp.com/splashes/%s/%s.png?size=600"):format(guild.id, guild.splash)
+			end
+
+			if bannerUrl then
+				Frame:SetThumbnail(bannerUrl, DiscordCard.BannerHeight)
+			end
+		end
+	end
+
+	function DiscordCard:Refresh()
+		task.spawn(function()
+			if not DiscordCard.Code then
+				if not Config.Desc then
+					Frame:SetDesc("Invalid invite link.")
+				end
+				return
+			end
+
+			local data, reason = FetchInvite(DiscordCard.Code)
+			if data then
+				ApplyData(data)
+			elseif not Config.Desc then
+				Frame:SetDesc(reason)
 			end
 		end)
 	end
 
-	function DiscordCardModule:SetInvite(invite)
-		DiscordCardModule.Invite = ParseInvite(invite)
-		OnlineLabel.Text = "Loading..."
-		OnlineDot.Visible = false
-		MemberDot.Visible = false
-		MembersLabel.Text = ""
-		DiscordCardModule:Refresh()
+	function DiscordCard:GetData()
+		return DiscordCard.Data
 	end
 
-	function DiscordCardModule:Destroy()
-		Destroyed = true
-		Card:Destroy()
-	end
+	DiscordCard:Refresh()
 
-	DiscordCardModule:Refresh()
-
-	return DiscordCardModule.__type, DiscordCardModule
+	return DiscordCard.__type, DiscordCard
 end
 
 return Element
