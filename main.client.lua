@@ -1163,6 +1163,11 @@ do
 		Invite = "https://discord.gg/" .. InviteCode, -- or just the code
 		ButtonText = "Join",
 		ShowBanner = true,
+		ShowBadges = true, -- Verified / Partnered / Community / Boosts
+		ShowDescription = true, -- server description under the counters
+		ShowCopyButton = true, -- small "copy link" button next to Join
+		-- AccentColor = Color3.fromRGB(88, 101, 242), -- Join button + badges color
+		RefreshInterval = 60, -- live online/member counters (seconds, minimum 30)
 		Callback = function(data, openedApp)
 			print("Join clicked | opened in Discord app:", openedApp)
 		end,
