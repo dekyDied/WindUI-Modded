@@ -3,14 +3,18 @@ local New = Creator.New
 local NewRoundFrame = Creator.NewRoundFrame
 local Tween = Creator.Tween
 
+local TagModule = require("../components/ui/Tag")
+
 local HttpService = game:GetService("HttpService")
 
 local SetClipboard = setclipboard or toclipboard or set_clipboard
 
 local Element = {}
 
-local BLURPLE = Color3.fromRGB(88, 101, 242)
-local BLURPLE_HOVER = Color3.fromRGB(71, 82, 196)
+local DEFAULT_ACCENT = Color3.fromRGB(88, 101, 242) -- Discord blurple
+local ONLINE_GREEN = Color3.fromRGB(35, 165, 90)
+local ONLINE_HEX = "#23A55A"
+local MEMBERS_HEX = "#80848E"
 
 -- Accepts a bare code ("abc123"), "discord.gg/abc123", "dsc.gg/abc123"
 -- or "https://discord.com/invite/abc123" and returns just the code.
@@ -33,6 +37,22 @@ local function FormatNumber(number)
 	local text = tostring(math.floor(tonumber(number) or 0))
 	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
 	return (formatted:gsub("^,", ""))
+end
+
+-- Cuts long texts without breaking multi-byte characters.
+local function Truncate(text, maxChars)
+	local length = utf8.len(text)
+	if length and length > maxChars then
+		return text:sub(1, utf8.offset(text, maxChars) - 1) .. "..."
+	end
+	return text
+end
+
+local function HasFeature(guild, feature)
+	if typeof(guild.features) ~= "table" then
+		return false
+	end
+	return table.find(guild.features, feature) ~= nil
 end
 
 -- Asks the public Discord API about the invite (name, icon, banner, member counts).
@@ -94,7 +114,11 @@ function Element:New(Config)
 		Title = Config.Title or "Discord Server",
 		Desc = Config.Desc or "Loading server info...",
 		ButtonText = Config.ButtonText or "Join",
+		AccentColor = typeof(Config.AccentColor) == "Color3" and Config.AccentColor or DEFAULT_ACCENT,
 		ShowBanner = Config.ShowBanner ~= false,
+		ShowBadges = Config.ShowBadges ~= false,
+		ShowDescription = Config.ShowDescription ~= false,
+		ShowCopyButton = Config.ShowCopyButton ~= false,
 		BannerHeight = Config.BannerHeight or 100,
 		IconSize = Config.IconSize or 44,
 		IconRounded = Config.IconRounded ~= false,
@@ -102,6 +126,9 @@ function Element:New(Config)
 		Data = nil,
 		UIElements = {},
 	}
+
+	local AccentColor = DiscordCard.AccentColor
+	local AccentHover = AccentColor:Lerp(Color3.new(0, 0, 0), 0.2)
 
 	local Frame = require("../components/window/Element")({
 		Title = DiscordCard.Title,
@@ -122,19 +149,28 @@ function Element:New(Config)
 
 	DiscordCard.DiscordCardFrame = Frame
 
-	-- Row layout: [icon] [title + desc] [join button]
+	-- The counters use colored dots, so the description label needs rich text.
+	-- (A custom Desc from the user stays plain text.)
+	if not Config.Desc then
+		Frame.UIElements.Desc.RichText = true
+	end
+
+	-- Row layout: [icon] [title + badges + desc] [copy link] [join]
 	local Padding = Config.Window.ElementConfig.UIPadding
 	local TitleRow = Frame.UIElements.Container.TitleFrame
 	local TextFrame = TitleRow.TitleFrame
 
 	local IconSize = DiscordCard.IconSize
 	local ButtonWidth = math.max(72, #DiscordCard.ButtonText * 9 + 40)
+	local CopyWidth = DiscordCard.ShowCopyButton and 34 or 0
 	local IconCorner = DiscordCard.IconRounded and 999 or 10
+	local ItemCount = DiscordCard.ShowCopyButton and 4 or 3
 
+	-- ICON (+ online dot) -------------------------------------------------
 	local IconHolder = New("Frame", {
 		Name = "IconHolder",
 		Size = UDim2.new(0, IconSize, 0, IconSize),
-		BackgroundColor3 = BLURPLE,
+		BackgroundColor3 = AccentColor,
 		BackgroundTransparency = 0.85,
 		LayoutOrder = -99,
 		Parent = TitleRow,
@@ -144,13 +180,79 @@ function Element:New(Config)
 		}),
 	})
 
-	-- The text takes whatever space is left between the icon and the button.
-	TextFrame.Size = UDim2.new(1, -(IconSize + ButtonWidth + Padding * 2), 1, 0)
+	local OnlineDot = New("Frame", {
+		Name = "OnlineDot",
+		Size = UDim2.new(0, 14, 0, 14),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(DiscordCard.IconRounded and 0.86 or 0.95, 0, DiscordCard.IconRounded and 0.86 or 0.95, 0),
+		BackgroundColor3 = ONLINE_GREEN,
+		Visible = false,
+		ZIndex = 5,
+		Parent = IconHolder,
+	}, {
+		New("UICorner", {
+			CornerRadius = UDim.new(1, 0),
+		}),
+		New("UIStroke", {
+			Thickness = 2.5,
+			Color = Color3.fromRGB(24, 24, 28),
+		}),
+	})
 
+	-- Skeleton effect: the icon placeholder breathes until the data arrives.
+	local LoadingPulse = Tween(
+		IconHolder,
+		0.8,
+		{ BackgroundTransparency = 0.6 },
+		Enum.EasingStyle.Sine,
+		Enum.EasingDirection.InOut,
+		-1,
+		true
+	)
+	LoadingPulse:Play()
+
+	local function StopLoading()
+		LoadingPulse:Cancel()
+		IconHolder.BackgroundTransparency = 0.85
+	end
+
+	-- The text takes whatever space is left between the icon and the buttons.
+	TextFrame.Size = UDim2.new(1, -(IconSize + ButtonWidth + CopyWidth + Padding * (ItemCount - 1)), 1, 0)
+
+	-- Extra line with the server description (dimmer than the counters).
+	local DescriptionLabel = New("TextLabel", {
+		Name = "ServerDescription",
+		BackgroundTransparency = 1,
+		Text = "",
+		TextSize = 14,
+		TextXAlignment = "Left",
+		TextWrapped = true,
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = "Y",
+		LayoutOrder = 10,
+		Visible = false,
+		FontFace = Font.new(Creator.Font, Enum.FontWeight.Medium),
+		ThemeTag = {
+			TextColor3 = "ElementDesc",
+		},
+		TextTransparency = 0.5,
+		Parent = TextFrame,
+	})
+
+	-- JOIN BUTTON ---------------------------------------------------------
 	local JoinFill = NewRoundFrame(10, "Squircle", {
 		Name = "Fill",
-		ImageColor3 = BLURPLE,
+		ImageColor3 = AccentColor,
 		Size = UDim2.new(1, 0, 1, 0),
+	})
+
+	local JoinLabel = New("TextLabel", {
+		Size = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency = 1,
+		Text = DiscordCard.ButtonText,
+		TextColor3 = Color3.new(1, 1, 1),
+		TextSize = 16,
+		FontFace = Font.new(Creator.Font, Enum.FontWeight.SemiBold),
 	})
 
 	local JoinButton = New("TextButton", {
@@ -162,25 +264,106 @@ function Element:New(Config)
 		Parent = TitleRow,
 	}, {
 		JoinFill,
-		New("TextLabel", {
-			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundTransparency = 1,
-			Text = DiscordCard.ButtonText,
-			TextColor3 = Color3.new(1, 1, 1),
-			TextSize = 16,
-			FontFace = Font.new(Creator.Font, Enum.FontWeight.SemiBold),
-		}),
+		JoinLabel,
 	})
 
-	DiscordCard.UIElements.IconHolder = IconHolder
-	DiscordCard.UIElements.JoinButton = JoinButton
-
 	Creator.AddSignal(JoinButton.MouseEnter, function()
-		Tween(JoinFill, 0.1, { ImageColor3 = BLURPLE_HOVER }):Play()
+		Tween(JoinFill, 0.1, { ImageColor3 = AccentHover }):Play()
 	end)
 	Creator.AddSignal(JoinButton.MouseLeave, function()
-		Tween(JoinFill, 0.1, { ImageColor3 = BLURPLE }):Play()
+		Tween(JoinFill, 0.1, { ImageColor3 = AccentColor }):Play()
 	end)
+
+	-- Short feedback on the button after a click ("Copied!" / "Opened!").
+	local FlashId = 0
+	local function Flash(text)
+		FlashId = FlashId + 1
+		local myId = FlashId
+
+		JoinLabel.Text = text
+		Tween(JoinFill, 0.15, { ImageColor3 = ONLINE_GREEN }):Play()
+
+		task.delay(2, function()
+			if myId ~= FlashId then
+				return
+			end
+			JoinLabel.Text = DiscordCard.ButtonText
+			Tween(JoinFill, 0.15, { ImageColor3 = AccentColor }):Play()
+		end)
+	end
+
+	local function Notify(message)
+		pcall(function()
+			Config.WindUI:Notify({
+				Title = DiscordCard.Title,
+				Content = message,
+				Duration = 4,
+				Icon = "link",
+			})
+		end)
+	end
+
+	-- COPY LINK BUTTON ----------------------------------------------------
+	local CopyButton
+	if DiscordCard.ShowCopyButton then
+		local CopyIcon = Creator.Image("link", "link", 0, Config.Window.Folder, "Button", true)
+		CopyIcon.Size = UDim2.new(0, 18, 0, 18)
+		CopyIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+		CopyIcon.Position = UDim2.new(0.5, 0, 0.5, 0)
+
+		local CopyFill = NewRoundFrame(10, "Squircle", {
+			Name = "Fill",
+			ThemeTag = {
+				ImageColor3 = "Text",
+			},
+			ImageTransparency = 0.92,
+			Size = UDim2.new(1, 0, 1, 0),
+		})
+
+		CopyButton = New("TextButton", {
+			Name = "CopyButton",
+			Size = UDim2.new(0, CopyWidth, 0, 34),
+			BackgroundTransparency = 1,
+			Text = "",
+			LayoutOrder = 98,
+			Parent = TitleRow,
+		}, {
+			CopyFill,
+			CopyIcon,
+		})
+
+		Creator.AddSignal(CopyButton.MouseEnter, function()
+			Tween(CopyFill, 0.1, { ImageTransparency = 0.85 }):Play()
+		end)
+		Creator.AddSignal(CopyButton.MouseLeave, function()
+			Tween(CopyFill, 0.1, { ImageTransparency = 0.92 }):Play()
+		end)
+		Creator.AddSignal(CopyButton.MouseButton1Click, function()
+			DiscordCard:CopyLink()
+		end)
+	end
+
+	DiscordCard.UIElements.IconHolder = IconHolder
+	DiscordCard.UIElements.OnlineDot = OnlineDot
+	DiscordCard.UIElements.JoinButton = JoinButton
+	DiscordCard.UIElements.CopyButton = CopyButton
+
+	-- ACTIONS -------------------------------------------------------------
+	function DiscordCard:CopyLink()
+		if not DiscordCard.Code then
+			return false
+		end
+
+		local link = "https://discord.gg/" .. DiscordCard.Code
+		if SetClipboard then
+			pcall(SetClipboard, link)
+			Notify("Invite link copied to your clipboard.")
+		else
+			Notify(link)
+		end
+
+		return true
+	end
 
 	-- Join: try the Discord app first, otherwise copy the invite link.
 	function DiscordCard:Join()
@@ -189,27 +372,15 @@ function Element:New(Config)
 		end
 
 		task.spawn(function()
-			local link = "https://discord.gg/" .. DiscordCard.Code
 			local openedApp = OpenInDiscordApp(DiscordCard.Code)
-			local message
 
 			if openedApp then
-				message = "Check your Discord app to accept the invite."
-			elseif SetClipboard then
-				pcall(SetClipboard, link)
-				message = "Invite link copied to your clipboard."
+				Flash("Opened!")
+				Notify("Check your Discord app to accept the invite.")
 			else
-				message = link
+				Flash(SetClipboard and "Copied!" or "Link sent")
+				DiscordCard:CopyLink()
 			end
-
-			pcall(function()
-				Config.WindUI:Notify({
-					Title = DiscordCard.Title,
-					Content = message,
-					Duration = 4,
-					Icon = "link",
-				})
-			end)
 
 			Creator.SafeCallback(DiscordCard.Callback, DiscordCard.Data, openedApp)
 		end)
@@ -221,30 +392,84 @@ function Element:New(Config)
 		DiscordCard:Join()
 	end)
 
+	-- DATA ----------------------------------------------------------------
+	local BuiltStaticParts = false
+
 	local function ApplyData(data)
 		local guild = data.guild
 		DiscordCard.Data = data
+
+		StopLoading()
 
 		if not Config.Title then
 			DiscordCard.Title = guild.name
 			Frame:SetTitle(guild.name)
 		end
 
+		-- Counters (updated on every refresh)
+		local online = tonumber(data.approximate_presence_count)
+		local members = tonumber(data.approximate_member_count)
+
 		if not Config.Desc then
 			local parts = {}
-			local online = tonumber(data.approximate_presence_count)
-			local members = tonumber(data.approximate_member_count)
 
 			if online then
-				table.insert(parts, FormatNumber(online) .. " online")
+				table.insert(
+					parts,
+					('<font color="%s">●</font> %s online'):format(ONLINE_HEX, FormatNumber(online))
+				)
 			end
 			if members then
-				table.insert(parts, FormatNumber(members) .. " members")
+				table.insert(
+					parts,
+					('<font color="%s">●</font> %s members'):format(MEMBERS_HEX, FormatNumber(members))
+				)
 			end
 
-			Frame:SetDesc(#parts > 0 and table.concat(parts, "  •  ") or guild.description)
+			if #parts > 0 then
+				Frame:SetDesc(table.concat(parts, "   "))
+			end
 		end
 
+		OnlineDot.Visible = online ~= nil and online > 0
+
+		if BuiltStaticParts then
+			return
+		end
+		BuiltStaticParts = true
+
+		-- Server description
+		if DiscordCard.ShowDescription and typeof(guild.description) == "string" and guild.description ~= "" then
+			DescriptionLabel.Text = Truncate((guild.description:gsub("%s+", " ")), 110)
+			DescriptionLabel.Visible = true
+		end
+
+		-- Badges
+		if DiscordCard.ShowBadges then
+			local TagsFrame = TextFrame.ScrollingFrame
+			local function AddBadge(title, color)
+				TagsFrame.Visible = true
+				TextFrame.Space.Visible = true
+				TagModule:New({ Title = title, Color = color }, TagsFrame)
+			end
+
+			if HasFeature(guild, "VERIFIED") then
+				AddBadge("Verified", AccentColor)
+			end
+			if HasFeature(guild, "PARTNERED") then
+				AddBadge("Partnered", AccentColor)
+			end
+			if HasFeature(guild, "COMMUNITY") then
+				AddBadge("Community", Color3.fromRGB(64, 66, 73))
+			end
+
+			local boosts = tonumber(guild.premium_subscription_count)
+			if boosts and boosts > 0 then
+				AddBadge(FormatNumber(boosts) .. " Boosts", Color3.fromRGB(244, 127, 255))
+			end
+		end
+
+		-- Icon
 		if guild.icon then
 			local IconImage = Creator.Image(
 				("https://cdn.discordapp.com/icons/%s/%s.png?size=128"):format(guild.id, guild.icon),
@@ -258,6 +483,7 @@ function Element:New(Config)
 			IconImage.Parent = IconHolder
 		end
 
+		-- Banner
 		if DiscordCard.ShowBanner then
 			local bannerUrl
 			if guild.banner then
@@ -275,6 +501,7 @@ function Element:New(Config)
 	function DiscordCard:Refresh()
 		task.spawn(function()
 			if not DiscordCard.Code then
+				StopLoading()
 				if not Config.Desc then
 					Frame:SetDesc("Invalid invite link.")
 				end
@@ -284,8 +511,11 @@ function Element:New(Config)
 			local data, reason = FetchInvite(DiscordCard.Code)
 			if data then
 				ApplyData(data)
-			elseif not Config.Desc then
-				Frame:SetDesc(reason)
+			else
+				StopLoading()
+				if not Config.Desc and not DiscordCard.Data then
+					Frame:SetDesc(reason)
+				end
 			end
 		end)
 	end
@@ -295,6 +525,21 @@ function Element:New(Config)
 	end
 
 	DiscordCard:Refresh()
+
+	-- Optional live counters: RefreshInterval = 60 (seconds, minimum 30).
+	if tonumber(Config.RefreshInterval) then
+		task.spawn(function()
+			local interval = math.max(30, tonumber(Config.RefreshInterval))
+			local Main = Frame.UIElements.Main
+
+			while Main.Parent do
+				task.wait(interval)
+				if Main.Parent then
+					DiscordCard:Refresh()
+				end
+			end
+		end)
+	end
 
 	return DiscordCard.__type, DiscordCard
 end
