@@ -10,4 +10,5 @@ return { -- lucide
 	Code = "terminal",
 	Colorpicker = "palette",
 	ProgressBar = "chart-bar",
+	DiscordCard = "message-circle",
 }
