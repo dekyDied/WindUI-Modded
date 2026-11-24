@@ -24,7 +24,8 @@ do
 		if cloneref(game:GetService("RunService")):IsStudio() then
 			WindUI = require(cloneref(ReplicatedStorage:WaitForChild("WindUI"):WaitForChild("Init")))
 		else
-			WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/dekyDied/WindUI-Modded/main/dist/main.lua"))()
+			WindUI =
+				loadstring(game:HttpGet("https://raw.githubusercontent.com/dekyDied/WindUI-Modded/main/dist/main.lua"))()
 		end
 	end
 end
@@ -1151,6 +1152,20 @@ do
 	local DiscordTab = OtherSection:Tab({
 		Title = "Discord",
 		Border = true,
+	})
+
+	-- DiscordCard: shows the server (icon, name, online/members) with a Join button
+	DiscordTab:Section({
+		Title = "DiscordCard",
+		TextSize = 20,
+	})
+	DiscordTab:DiscordCard({
+		Invite = "https://discord.gg/" .. InviteCode, -- or just the code
+		ButtonText = "Join",
+		ShowBanner = true,
+		Callback = function(data, openedApp)
+			print("Join clicked | opened in Discord app:", openedApp)
+		end,
 	})
 
 	if Response and Response.guild then
