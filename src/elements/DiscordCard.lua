@@ -39,6 +39,17 @@ local function FormatNumber(number)
 	return (formatted:gsub("^,", ""))
 end
 
+-- "Rounded" (default), "Circle" or "Square"
+local function ParseIconShape(shape)
+	shape = string.lower(tostring(shape or "Rounded"))
+	if shape == "circle" then
+		return "Circle"
+	elseif shape == "square" then
+		return "Square"
+	end
+	return "Rounded"
+end
+
 -- Cuts long texts without breaking multi-byte characters.
 local function Truncate(text, maxChars)
 	local length = utf8.len(text)
@@ -119,9 +130,9 @@ function Element:New(Config)
 		ShowBadges = Config.ShowBadges ~= false,
 		ShowDescription = Config.ShowDescription ~= false,
 		ShowCopyButton = Config.ShowCopyButton ~= false,
-		BannerHeight = Config.BannerHeight or 100,
-		IconSize = Config.IconSize or 44,
-		IconRounded = Config.IconRounded ~= false,
+		BannerHeight = Config.BannerHeight or 130,
+		IconSize = Config.IconSize or 48,
+		IconShape = ParseIconShape(Config.IconShape),
 		Callback = Config.Callback or function() end,
 		Data = nil,
 		UIElements = {},
@@ -144,7 +155,6 @@ function Element:New(Config)
 		ParentConfig = Config,
 		Size = Config.Size,
 		Tags = Config.Tags,
-		ThumbnailSize = DiscordCard.BannerHeight,
 	})
 
 	DiscordCard.DiscordCardFrame = Frame
@@ -163,7 +173,8 @@ function Element:New(Config)
 	local IconSize = DiscordCard.IconSize
 	local ButtonWidth = math.max(72, #DiscordCard.ButtonText * 9 + 40)
 	local CopyWidth = DiscordCard.ShowCopyButton and 34 or 0
-	local IconCorner = DiscordCard.IconRounded and 999 or 10
+	local IsCircle = DiscordCard.IconShape == "Circle"
+	local IconCorner = IsCircle and 999 or DiscordCard.IconShape == "Square" and 0 or math.floor(IconSize * 0.25)
 	local ItemCount = DiscordCard.ShowCopyButton and 4 or 3
 
 	-- ICON (+ online dot) -------------------------------------------------
@@ -184,7 +195,7 @@ function Element:New(Config)
 		Name = "OnlineDot",
 		Size = UDim2.new(0, 14, 0, 14),
 		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(DiscordCard.IconRounded and 0.86 or 0.95, 0, DiscordCard.IconRounded and 0.86 or 0.95, 0),
+		Position = UDim2.new(IsCircle and 0.86 or 0.94, 0, IsCircle and 0.86 or 0.94, 0),
 		BackgroundColor3 = ONLINE_GREEN,
 		Visible = false,
 		ZIndex = 5,
@@ -483,7 +494,7 @@ function Element:New(Config)
 			IconImage.Parent = IconHolder
 		end
 
-		-- Banner
+		-- Banner: full-bleed at the top of the card, fading into the card background
 		if DiscordCard.ShowBanner then
 			local bannerUrl
 			if guild.banner then
@@ -493,7 +504,50 @@ function Element:New(Config)
 			end
 
 			if bannerUrl then
-				Frame:SetThumbnail(bannerUrl, DiscordCard.BannerHeight)
+				local Height = DiscordCard.BannerHeight
+
+				-- Empty space in the layout, so the row starts below the banner.
+				local BannerSpace = New("Frame", {
+					Name = "BannerSpace",
+					Size = UDim2.new(1, 0, 0, math.max(0, Height - Padding)),
+					BackgroundTransparency = 1,
+					LayoutOrder = -1,
+					Parent = Frame.UIElements.Container,
+				})
+
+				local Banner = Creator.Image(
+					bannerUrl,
+					"discord-banner-" .. tostring(guild.id),
+					Config.Window.ElementConfig.UICorner,
+					Config.Window.Folder,
+					"Banner",
+					false
+				)
+				-- The card has inner padding; this cancels it so the banner touches the edges.
+				Banner.Position = UDim2.new(0, -Padding, 0, -Padding)
+				Banner.Size = UDim2.new(1, Padding * 2, 0, Height)
+				Banner.Parent = Frame.UIElements.Main
+
+				if Banner:FindFirstChild("ImageLabel") then
+					New("UIGradient", {
+						Rotation = 90,
+						Transparency = NumberSequence.new({
+							NumberSequenceKeypoint.new(0, 0),
+							NumberSequenceKeypoint.new(0.5, 0.1),
+							NumberSequenceKeypoint.new(0.8, 0.7),
+							NumberSequenceKeypoint.new(1, 1),
+						}),
+						Parent = Banner.ImageLabel,
+					})
+				end
+
+				-- If the image fails to download, Creator.Image destroys the frame:
+				-- give the reserved space back.
+				Creator.AddSignal(Banner.Destroying, function()
+					BannerSpace:Destroy()
+				end)
+
+				DiscordCard.UIElements.Banner = Banner
 			end
 		end
 	end
