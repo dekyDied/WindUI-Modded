@@ -36410,17 +36410,26 @@ function Element:New(Config)
 					Parent = Frame.UIElements.Container,
 				})
 
+				local Radius = Config.Window.ElementConfig.UICorner
+
+				-- The image is made taller than the visible area: its rounded bottom
+				-- corners sit below the point where the fade is already fully transparent,
+				-- so no ghost corners show up at the sides of the card.
+				local ImageHeight = Height + Radius * 2
+				local FadeEnd = Height / ImageHeight
+
 				local Banner = Creator.Image(
 					bannerUrl,
 					"discord-banner-" .. tostring(guild.id),
-					Config.Window.ElementConfig.UICorner,
+					Radius,
 					Config.Window.Folder,
 					"Banner",
 					false
 				)
 				-- The card has inner padding; this cancels it so the banner touches the edges.
 				Banner.Position = UDim2.new(0, -Padding, 0, -Padding)
-				Banner.Size = UDim2.new(1, Padding * 2, 0, Height)
+				Banner.Size = UDim2.new(1, Padding * 2, 0, ImageHeight)
+				Banner.ZIndex = 0 -- always behind the card content
 				Banner.Parent = Frame.UIElements.Main
 
 				if Banner:FindFirstChild("ImageLabel") then
@@ -36428,8 +36437,9 @@ function Element:New(Config)
 						Rotation = 90,
 						Transparency = NumberSequence.new({
 							NumberSequenceKeypoint.new(0, 0),
-							NumberSequenceKeypoint.new(0.5, 0.1),
-							NumberSequenceKeypoint.new(0.8, 0.7),
+							NumberSequenceKeypoint.new(FadeEnd * 0.5, 0.1),
+							NumberSequenceKeypoint.new(FadeEnd * 0.8, 0.7),
+							NumberSequenceKeypoint.new(FadeEnd, 1),
 							NumberSequenceKeypoint.new(1, 1),
 						}),
 						Parent = Banner.ImageLabel,
