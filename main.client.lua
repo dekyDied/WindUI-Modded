@@ -1170,6 +1170,7 @@ do
 		ShowBadges = true, -- Verified / Partnered / Community / Boosts
 		ShowDescription = true, -- server description
 		ShowCopyButton = true, -- gray "copy link" button next to Join
+		Highlight = true, -- optional: light sweep over the card when Join is clicked
 		-- ButtonIcon = "rbxassetid://123235027784147", -- icon on the Join button (false = none)
 		-- AccentColor = Color3.fromRGB(36, 128, 70), -- Join button color (default: Discord green)
 		RefreshInterval = 60, -- live online/member counters (seconds, minimum 30)
