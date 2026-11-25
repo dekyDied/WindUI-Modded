@@ -17,11 +17,11 @@ local DISCORD_GREEN = Color3.fromRGB(36, 128, 70) -- primary (Join) button
 local ONLINE_GREEN = Color3.fromRGB(35, 165, 90)
 local SECONDARY_GRAY = Color3.fromRGB(78, 80, 88) -- secondary (copy) button
 local SECONDARY_GRAY_HOVER = Color3.fromRGB(107, 109, 118)
-local ONLINE_HEX = "#23A55A"
-local MEMBERS_HEX = "#80848E"
+local MEMBERS_GRAY = Color3.fromRGB(128, 132, 142)
+local DOT_RING = Color3.fromRGB(24, 24, 28)
 
 local DEFAULT_BUTTON_ICON = "rbxassetid://123235027784147"
-local BUTTON_HEIGHT = 34
+local DEFAULT_BUTTON_HEIGHT = 34
 
 -- Accepts a bare code ("abc123"), "discord.gg/abc123", "dsc.gg/abc123"
 -- or "https://discord.com/invite/abc123" and returns just the code.
@@ -72,6 +72,50 @@ local function FormatNumber(number)
 	local text = tostring(math.floor(tonumber(number) or 0))
 	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
 	return (formatted:gsub("^,", ""))
+end
+
+-- 12345 -> "12.3K", 1500000 -> "1.5M"
+local function FormatCompact(number)
+	number = math.floor(tonumber(number) or 0)
+
+	local value, suffix
+	if number >= 1000000 then
+		value, suffix = number / 1000000, "M"
+	elseif number >= 1000 then
+		value, suffix = number / 1000, "K"
+	else
+		return tostring(number)
+	end
+
+	local text = ("%.1f"):format(value):gsub("%.0$", "")
+	return text .. suffix
+end
+
+-- Replaces {count} in a user format such as "{count} online".
+local function ApplyCount(format, count)
+	return (tostring(format):gsub("{count}", function()
+		return tostring(count)
+	end))
+end
+
+-- Counters are drawn with rich text, so user text must not inject tags.
+local function EscapeRichText(text)
+	text = text:gsub("&", "&amp;")
+	text = text:gsub("<", "&lt;")
+	text = text:gsub(">", "&gt;")
+	return text
+end
+
+-- "BottomRight" (default), "BottomLeft", "TopRight" or "TopLeft" -> x, y (0-1)
+local function ParseDotPosition(position, inset)
+	position = string.lower(tostring(position or "BottomRight"))
+	local x = position:find("left") and inset or 1 - inset
+	local y = position:find("top") and inset or 1 - inset
+	return x, y
+end
+
+local function ColorOr(value, default)
+	return typeof(value) == "Color3" and value or default
 end
 
 -- Cuts long texts without breaking multi-byte characters.
@@ -175,12 +219,14 @@ local function OpenInDiscordApp(code)
 end
 
 function Element:New(Config)
+	local ShowCounters = Config.ShowOnline ~= false or Config.ShowMembers ~= false
+
 	local DiscordCard = {
 		__type = "DiscordCard",
 		Invite = Config.Invite,
 		Code = ParseInviteCode(Config.Invite),
 		Title = Config.Title or "Discord Server",
-		Desc = Config.Desc or "Loading server info...",
+		Desc = Config.Desc or (ShowCounters and "Loading server info..." or nil),
 		ButtonText = Config.ButtonText or "Join",
 		ButtonIcon = Config.ButtonIcon == nil and DEFAULT_BUTTON_ICON or Config.ButtonIcon, -- false = no icon
 		AccentColor = typeof(Config.AccentColor) == "Color3" and Config.AccentColor or DISCORD_GREEN,
@@ -188,7 +234,28 @@ function Element:New(Config)
 		BannerSource = ParseBannerSource(Config.BannerSource),
 		ShowBadges = Config.ShowBadges ~= false,
 		ShowDescription = Config.ShowDescription ~= false,
+		DescriptionMaxLength = Config.DescriptionMaxLength or 110,
 		ShowCopyButton = Config.ShowCopyButton ~= false,
+		ButtonHeight = Config.ButtonHeight or DEFAULT_BUTTON_HEIGHT,
+		-- counters
+		ShowOnline = Config.ShowOnline ~= false,
+		ShowMembers = Config.ShowMembers ~= false,
+		OnlineFormat = Config.OnlineFormat or "{count} online",
+		MembersFormat = Config.MembersFormat or "{count} members",
+		OnlineColor = ColorOr(Config.OnlineColor, ONLINE_GREEN),
+		MembersColor = ColorOr(Config.MembersColor, MEMBERS_GRAY),
+		ShowCounterDots = Config.ShowCounterDots ~= false,
+		ShortNumbers = Config.ShortNumbers == true,
+		-- icon + status dot
+		ShowIcon = Config.ShowIcon ~= false,
+		ShowStatusDot = Config.ShowStatusDot ~= false,
+		StatusDotColor = ColorOr(Config.StatusDotColor, ONLINE_GREEN),
+		StatusDotRingColor = ColorOr(Config.StatusDotRingColor, DOT_RING),
+		StatusDotSize = Config.StatusDotSize or 16,
+		StatusDotPosition = Config.StatusDotPosition or "BottomRight",
+		StatusDotAlways = Config.StatusDotAlways == true,
+		-- tags: Badges = { Verified = false, Boosts = { Title = "{count} Boosts", Color = ... } }
+		Badges = typeof(Config.Badges) == "table" and Config.Badges or {},
 		Highlight = Config.Highlight == true, -- optional: sweep animation when Join is clicked
 		BannerHeight = Config.BannerHeight or 90,
 		IconSize = Config.IconSize or 64,
@@ -233,62 +300,74 @@ function Element:New(Config)
 	local TextFrame = TitleRow.TitleFrame
 
 	local IconSize = DiscordCard.IconSize
-	local CopyWidth = DiscordCard.ShowCopyButton and BUTTON_HEIGHT or 0
+	local ButtonHeight = DiscordCard.ButtonHeight
+	local CopyWidth = DiscordCard.ShowCopyButton and ButtonHeight or 0
 	local IsCircle = DiscordCard.IconShape == "Circle"
 	local IconCorner = IsCircle and 999 or DiscordCard.IconShape == "Square" and 0 or math.floor(IconSize * 0.25)
 
-	-- ICON (+ online dot) -------------------------------------------------
-	local IconHolder = New("Frame", {
-		Name = "IconHolder",
-		Size = UDim2.new(0, IconSize, 0, IconSize),
-		BackgroundColor3 = BLURPLE,
-		BackgroundTransparency = 0.85,
-		LayoutOrder = -99,
-		Parent = TitleRow,
-	}, {
-		New("UICorner", {
-			CornerRadius = UDim.new(0, IconCorner),
-		}),
-	})
+	-- ICON (+ status dot) ---------------------------------------------------
+	local IconHolder, OnlineDot, LoadingPulse
 
-	local OnlineDot = New("Frame", {
-		Name = "OnlineDot",
-		Size = UDim2.new(0, 16, 0, 16),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.new(IsCircle and 0.86 or 0.94, 0, IsCircle and 0.86 or 0.94, 0),
-		BackgroundColor3 = ONLINE_GREEN,
-		Visible = false,
-		ZIndex = 5,
-		Parent = IconHolder,
-	}, {
-		New("UICorner", {
-			CornerRadius = UDim.new(1, 0),
-		}),
-		New("UIStroke", {
-			Thickness = 2.5,
-			Color = Color3.fromRGB(24, 24, 28),
-		}),
-	})
+	if DiscordCard.ShowIcon then
+		IconHolder = New("Frame", {
+			Name = "IconHolder",
+			Size = UDim2.new(0, IconSize, 0, IconSize),
+			BackgroundColor3 = BLURPLE,
+			BackgroundTransparency = 0.85,
+			LayoutOrder = -99,
+			Parent = TitleRow,
+		}, {
+			New("UICorner", {
+				CornerRadius = UDim.new(0, IconCorner),
+			}),
+		})
 
-	-- Skeleton effect: the icon placeholder breathes until the data arrives.
-	local LoadingPulse = Tween(
-		IconHolder,
-		0.8,
-		{ BackgroundTransparency = 0.6 },
-		Enum.EasingStyle.Sine,
-		Enum.EasingDirection.InOut,
-		-1,
-		true
-	)
-	LoadingPulse:Play()
+		if DiscordCard.ShowStatusDot then
+			local DotSize = DiscordCard.StatusDotSize
+			local DotX, DotY = ParseDotPosition(DiscordCard.StatusDotPosition, IsCircle and 0.14 or 0.06)
+
+			OnlineDot = New("Frame", {
+				Name = "OnlineDot",
+				Size = UDim2.new(0, DotSize, 0, DotSize),
+				AnchorPoint = Vector2.new(0.5, 0.5),
+				Position = UDim2.new(DotX, 0, DotY, 0),
+				BackgroundColor3 = DiscordCard.StatusDotColor,
+				Visible = false,
+				ZIndex = 5,
+				Parent = IconHolder,
+			}, {
+				New("UICorner", {
+					CornerRadius = UDim.new(1, 0),
+				}),
+				New("UIStroke", {
+					Thickness = 2.5,
+					Color = DiscordCard.StatusDotRingColor,
+				}),
+			})
+		end
+
+		-- Skeleton effect: the icon placeholder breathes until the data arrives.
+		LoadingPulse = Tween(
+			IconHolder,
+			0.8,
+			{ BackgroundTransparency = 0.6 },
+			Enum.EasingStyle.Sine,
+			Enum.EasingDirection.InOut,
+			-1,
+			true
+		)
+		LoadingPulse:Play()
+	end
 
 	local function StopLoading()
-		LoadingPulse:Cancel()
-		IconHolder.BackgroundTransparency = 0.85
+		if LoadingPulse then
+			LoadingPulse:Cancel()
+			IconHolder.BackgroundTransparency = 0.85
+		end
 	end
 
 	-- The text takes whatever space is left next to the icon.
-	TextFrame.Size = UDim2.new(1, -(IconSize + Padding), 1, 0)
+	TextFrame.Size = UDim2.new(1, -(DiscordCard.ShowIcon and (IconSize + Padding) or 0), 1, 0)
 
 	-- Dimmer info line under the counters (the server description).
 	local function CreateInfoLabel(name, order)
@@ -317,7 +396,7 @@ function Element:New(Config)
 	-- BUTTONS ROW (full width, Discord style) ------------------------------
 	local ButtonsRow = New("Frame", {
 		Name = "ButtonsRow",
-		Size = UDim2.new(1, 0, 0, BUTTON_HEIGHT),
+		Size = UDim2.new(1, 0, 0, ButtonHeight),
 		BackgroundTransparency = 1,
 		LayoutOrder = 50,
 		Parent = Container,
@@ -537,7 +616,7 @@ function Element:New(Config)
 
 	-- IMAGES (the server's real icon and banner) ------------------------------
 	local function BuildIcon(guild)
-		if not guild.icon then
+		if not IconHolder or not guild.icon then
 			return
 		end
 
@@ -705,26 +784,33 @@ function Element:New(Config)
 
 		if not Config.Desc then
 			local parts = {}
+			local FormatCount = DiscordCard.ShortNumbers and FormatCompact or FormatNumber
 
-			if online then
-				table.insert(
-					parts,
-					('<font color="%s">●</font> %s online'):format(ONLINE_HEX, FormatNumber(online))
-				)
+			local function AddCounter(show, value, format, color)
+				if not show or not value then
+					return
+				end
+
+				local text = EscapeRichText(ApplyCount(format, FormatCount(value)))
+				if DiscordCard.ShowCounterDots then
+					text = ('<font color="#%s">●</font> '):format(color:ToHex()) .. text
+				end
+				table.insert(parts, text)
 			end
-			if members then
-				table.insert(
-					parts,
-					('<font color="%s">●</font> %s members'):format(MEMBERS_HEX, FormatNumber(members))
-				)
-			end
+
+			AddCounter(DiscordCard.ShowOnline, online, DiscordCard.OnlineFormat, DiscordCard.OnlineColor)
+			AddCounter(DiscordCard.ShowMembers, members, DiscordCard.MembersFormat, DiscordCard.MembersColor)
 
 			if #parts > 0 then
 				Frame:SetDesc(table.concat(parts, "   "))
+			else
+				Frame:SetDesc(nil) -- nothing to show: hides the line
 			end
 		end
 
-		OnlineDot.Visible = online ~= nil and online > 0
+		if OnlineDot then
+			OnlineDot.Visible = DiscordCard.StatusDotAlways or (online ~= nil and online > 0)
+		end
 
 		if BuiltStaticParts then
 			return
@@ -736,32 +822,64 @@ function Element:New(Config)
 			or typeof(profile.description) == "string" and profile.description
 			or ""
 		if DiscordCard.ShowDescription and description ~= "" then
-			DescriptionLabel.Text = Truncate((description:gsub("%s+", " ")), 110)
+			DescriptionLabel.Text = Truncate((description:gsub("%s+", " ")), DiscordCard.DescriptionMaxLength)
 			DescriptionLabel.Visible = true
 		end
 
-		-- Badges
+		-- Badges (each one can be hidden or restyled through the Badges option)
 		if DiscordCard.ShowBadges then
 			local TagsFrame = TextFrame.ScrollingFrame
-			local function AddBadge(title, color)
-				TagsFrame.Visible = true
-				TextFrame.Space.Visible = true
-				TagModule:New({ Title = title, Color = color }, TagsFrame)
-			end
-
-			if HasFeature(guild, "VERIFIED") then
-				AddBadge("Verified", BLURPLE)
-			end
-			if HasFeature(guild, "PARTNERED") then
-				AddBadge("Partnered", BLURPLE)
-			end
-			if HasFeature(guild, "COMMUNITY") then
-				AddBadge("Community", Color3.fromRGB(64, 66, 73))
-			end
-
 			local boosts = tonumber(guild.premium_subscription_count)
-			if boosts and boosts > 0 then
-				AddBadge(FormatNumber(boosts) .. " Boosts", Color3.fromRGB(244, 127, 255))
+
+			local badges = {
+				{
+					key = "Verified",
+					show = HasFeature(guild, "VERIFIED"),
+					title = "Verified",
+					color = BLURPLE,
+				},
+				{
+					key = "Partnered",
+					show = HasFeature(guild, "PARTNERED"),
+					title = "Partnered",
+					color = BLURPLE,
+				},
+				{
+					key = "Community",
+					show = HasFeature(guild, "COMMUNITY"),
+					title = "Community",
+					color = Color3.fromRGB(64, 66, 73),
+				},
+				{
+					key = "Boosts",
+					show = boosts ~= nil and boosts > 0,
+					title = "{count} Boosts",
+					color = Color3.fromRGB(244, 127, 255),
+					count = boosts,
+				},
+			}
+
+			for _, badge in ipairs(badges) do
+				local setting = DiscordCard.Badges[badge.key]
+
+				if badge.show and setting ~= false then
+					local override = typeof(setting) == "table" and setting or {}
+					local title = override.Title or badge.title
+					if badge.count then
+						title = ApplyCount(title, DiscordCard.ShortNumbers and FormatCompact(badge.count) or FormatNumber(badge.count))
+					end
+
+					TagsFrame.Visible = true
+					TextFrame.Space.Visible = true
+					TagModule:New({
+						Title = title,
+						Color = override.Color or badge.color,
+						Icon = override.Icon,
+						Radius = override.Radius,
+						Border = override.Border,
+						Window = Config.Window.Folder,
+					}, TagsFrame)
+				end
 			end
 		end
 
