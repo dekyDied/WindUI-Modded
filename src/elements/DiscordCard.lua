@@ -11,10 +11,19 @@ local SetClipboard = setclipboard or toclipboard or set_clipboard
 
 local Element = {}
 
-local DEFAULT_ACCENT = Color3.fromRGB(88, 101, 242) -- Discord blurple
+-- Discord palette
+local BLURPLE = Color3.fromRGB(88, 101, 242)
+local DISCORD_GREEN = Color3.fromRGB(36, 128, 70) -- primary (Join) button
 local ONLINE_GREEN = Color3.fromRGB(35, 165, 90)
+local SECONDARY_GRAY = Color3.fromRGB(78, 80, 88) -- secondary (copy) button
+local SECONDARY_GRAY_HOVER = Color3.fromRGB(107, 109, 118)
 local ONLINE_HEX = "#23A55A"
 local MEMBERS_HEX = "#80848E"
+
+local DEFAULT_BUTTON_ICON = "rbxassetid://123235027784147"
+local BUTTON_HEIGHT = 38
+
+local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
 
 -- Accepts a bare code ("abc123"), "discord.gg/abc123", "dsc.gg/abc123"
 -- or "https://discord.com/invite/abc123" and returns just the code.
@@ -32,13 +41,6 @@ local function ParseInviteCode(invite)
 		or invite:match("^([%w%-_]+)$")
 end
 
--- 12345 -> "12,345"
-local function FormatNumber(number)
-	local text = tostring(math.floor(tonumber(number) or 0))
-	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
-	return (formatted:gsub("^,", ""))
-end
-
 -- "Rounded" (default), "Circle" or "Square"
 local function ParseIconShape(shape)
 	shape = string.lower(tostring(shape or "Rounded"))
@@ -48,6 +50,30 @@ local function ParseIconShape(shape)
 		return "Square"
 	end
 	return "Rounded"
+end
+
+-- "auto" (default), "profile", "banner", "splash" or "icon"
+local function ParseBannerSource(source)
+	source = string.lower(tostring(source or "auto"))
+	if source == "profile" or source == "banner" or source == "splash" or source == "icon" then
+		return source
+	end
+	return "auto"
+end
+
+local function ParseHexColor(hex)
+	if typeof(hex) ~= "string" then
+		return nil
+	end
+	local ok, color = pcall(Color3.fromHex, hex)
+	return ok and color or nil
+end
+
+-- 12345 -> "12,345"
+local function FormatNumber(number)
+	local text = tostring(math.floor(tonumber(number) or 0))
+	local formatted = text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+	return (formatted:gsub("^,", ""))
 end
 
 -- Cuts long texts without breaking multi-byte characters.
@@ -66,7 +92,24 @@ local function HasFeature(guild, feature)
 	return table.find(guild.features, feature) ~= nil
 end
 
--- Asks the public Discord API about the invite (name, icon, banner, member counts).
+-- Discord ids are snowflakes: the creation time is stored in the upper bits.
+-- Returns something like "Est. Oct 2024".
+local function EstablishedText(id)
+	local number = tonumber(id)
+	if not number then
+		return nil
+	end
+
+	local milliseconds = math.floor(number / 4194304) + 1420070400000
+	local ok, date = pcall(os.date, "!*t", math.floor(milliseconds / 1000))
+	if not ok or typeof(date) ~= "table" or not MONTHS[date.month] then
+		return nil
+	end
+
+	return ("Est. %s %d"):format(MONTHS[date.month], date.year)
+end
+
+-- Asks the public Discord API about the invite (name, icon, banner, member counts, profile).
 local function FetchInvite(code)
 	if not Creator.Request then
 		return nil, "Your executor does not support HTTP requests."
@@ -91,6 +134,39 @@ local function FetchInvite(code)
 	end
 
 	return data
+end
+
+-- Downloads a PNG from the Discord CDN and returns a rbxasset:// path for it.
+-- Returns nil when the image does not exist (404) or the executor can't load files.
+local function LoadRemoteImage(url, folder, name)
+	if not (Creator.Request and writefile and getcustomasset) then
+		return nil
+	end
+
+	local requestOk, response = pcall(Creator.Request, { Url = url, Method = "GET" })
+	if not requestOk or typeof(response) ~= "table" or typeof(response.Body) ~= "string" then
+		return nil
+	end
+	if response.StatusCode and response.StatusCode ~= 200 then
+		return nil
+	end
+	-- A real PNG starts with "\137PNG"; anything else is an error page.
+	if response.Body:sub(2, 4) ~= "PNG" then
+		return nil
+	end
+
+	local directory = "WindUI/" .. tostring(folder) .. "/assets"
+	if makefolder and isfolder and not isfolder(directory) then
+		pcall(makefolder, directory)
+	end
+
+	local path = directory .. "/.DiscordCard-" .. name:gsub("[^%w%-_]", "_") .. ".png"
+	if not pcall(writefile, path, response.Body) then
+		return nil
+	end
+
+	local assetOk, asset = pcall(getcustomasset, path)
+	return assetOk and asset or nil
 end
 
 -- If the Discord desktop app is open, this makes it show the "Join server" prompt.
@@ -125,10 +201,13 @@ function Element:New(Config)
 		Title = Config.Title or "Discord Server",
 		Desc = Config.Desc or "Loading server info...",
 		ButtonText = Config.ButtonText or "Join",
-		AccentColor = typeof(Config.AccentColor) == "Color3" and Config.AccentColor or DEFAULT_ACCENT,
+		ButtonIcon = Config.ButtonIcon == nil and DEFAULT_BUTTON_ICON or Config.ButtonIcon, -- false = no icon
+		AccentColor = typeof(Config.AccentColor) == "Color3" and Config.AccentColor or DISCORD_GREEN,
 		ShowBanner = Config.ShowBanner ~= false,
+		BannerSource = ParseBannerSource(Config.BannerSource),
 		ShowBadges = Config.ShowBadges ~= false,
 		ShowDescription = Config.ShowDescription ~= false,
+		ShowEstablished = Config.ShowEstablished ~= false,
 		ShowCopyButton = Config.ShowCopyButton ~= false,
 		BannerHeight = Config.BannerHeight or 130,
 		IconSize = Config.IconSize or 48,
@@ -165,23 +244,23 @@ function Element:New(Config)
 		Frame.UIElements.Desc.RichText = true
 	end
 
-	-- Row layout: [icon] [title + badges + desc] [copy link] [join]
+	-- Layout: the info row ([icon] [text]) and, below it, a full-width buttons row.
 	local Padding = Config.Window.ElementConfig.UIPadding
-	local TitleRow = Frame.UIElements.Container.TitleFrame
+	local Main = Frame.UIElements.Main
+	local Container = Frame.UIElements.Container
+	local TitleRow = Container.TitleFrame
 	local TextFrame = TitleRow.TitleFrame
 
 	local IconSize = DiscordCard.IconSize
-	local ButtonWidth = math.max(72, #DiscordCard.ButtonText * 9 + 40)
-	local CopyWidth = DiscordCard.ShowCopyButton and 34 or 0
+	local CopyWidth = DiscordCard.ShowCopyButton and BUTTON_HEIGHT or 0
 	local IsCircle = DiscordCard.IconShape == "Circle"
 	local IconCorner = IsCircle and 999 or DiscordCard.IconShape == "Square" and 0 or math.floor(IconSize * 0.25)
-	local ItemCount = DiscordCard.ShowCopyButton and 4 or 3
 
 	-- ICON (+ online dot) -------------------------------------------------
 	local IconHolder = New("Frame", {
 		Name = "IconHolder",
 		Size = UDim2.new(0, IconSize, 0, IconSize),
-		BackgroundColor3 = AccentColor,
+		BackgroundColor3 = BLURPLE,
 		BackgroundTransparency = 0.85,
 		LayoutOrder = -99,
 		Parent = TitleRow,
@@ -227,55 +306,103 @@ function Element:New(Config)
 		IconHolder.BackgroundTransparency = 0.85
 	end
 
-	-- The text takes whatever space is left between the icon and the buttons.
-	TextFrame.Size = UDim2.new(1, -(IconSize + ButtonWidth + CopyWidth + Padding * (ItemCount - 1)), 1, 0)
+	-- The text takes whatever space is left next to the icon.
+	TextFrame.Size = UDim2.new(1, -(IconSize + Padding), 1, 0)
 
-	-- Extra line with the server description (dimmer than the counters).
-	local DescriptionLabel = New("TextLabel", {
-		Name = "ServerDescription",
+	-- Dimmer info lines under the counters ("Est. Oct 2024" and the server description).
+	local function CreateInfoLabel(name, order)
+		return New("TextLabel", {
+			Name = name,
+			BackgroundTransparency = 1,
+			Text = "",
+			TextSize = 14,
+			TextXAlignment = "Left",
+			TextWrapped = true,
+			Size = UDim2.new(1, 0, 0, 0),
+			AutomaticSize = "Y",
+			LayoutOrder = order,
+			Visible = false,
+			FontFace = Font.new(Creator.Font, Enum.FontWeight.Medium),
+			ThemeTag = {
+				TextColor3 = "ElementDesc",
+			},
+			TextTransparency = 0.5,
+			Parent = TextFrame,
+		})
+	end
+
+	local EstablishedLabel = CreateInfoLabel("Established", 9)
+	local DescriptionLabel = CreateInfoLabel("ServerDescription", 10)
+
+	-- BUTTONS ROW (full width, Discord style) ------------------------------
+	local ButtonsRow = New("Frame", {
+		Name = "ButtonsRow",
+		Size = UDim2.new(1, 0, 0, BUTTON_HEIGHT),
 		BackgroundTransparency = 1,
-		Text = "",
-		TextSize = 14,
-		TextXAlignment = "Left",
-		TextWrapped = true,
-		Size = UDim2.new(1, 0, 0, 0),
-		AutomaticSize = "Y",
-		LayoutOrder = 10,
-		Visible = false,
-		FontFace = Font.new(Creator.Font, Enum.FontWeight.Medium),
-		ThemeTag = {
-			TextColor3 = "ElementDesc",
-		},
-		TextTransparency = 0.5,
-		Parent = TextFrame,
+		LayoutOrder = 50,
+		Parent = Container,
+	}, {
+		New("UIListLayout", {
+			FillDirection = "Horizontal",
+			VerticalAlignment = "Center",
+			Padding = UDim.new(0, 8),
+		}),
 	})
 
-	-- JOIN BUTTON ---------------------------------------------------------
-	local JoinFill = NewRoundFrame(10, "Squircle", {
+	-- Join button: green, with the icon + label centered.
+	local JoinFill = NewRoundFrame(8, "Squircle", {
 		Name = "Fill",
 		ImageColor3 = AccentColor,
 		Size = UDim2.new(1, 0, 1, 0),
 	})
 
+	local JoinIcon
+	if DiscordCard.ButtonIcon then
+		JoinIcon = New("ImageLabel", {
+			Name = "JoinIcon",
+			Size = UDim2.new(0, 20, 0, 20),
+			BackgroundTransparency = 1,
+			Image = DiscordCard.ButtonIcon,
+			ImageColor3 = Color3.new(1, 1, 1),
+			LayoutOrder = 1,
+		})
+	end
+
 	local JoinLabel = New("TextLabel", {
-		Size = UDim2.new(1, 0, 1, 0),
+		Size = UDim2.new(0, 0, 0, 0),
+		AutomaticSize = "XY",
 		BackgroundTransparency = 1,
 		Text = DiscordCard.ButtonText,
 		TextColor3 = Color3.new(1, 1, 1),
 		TextSize = 16,
+		LayoutOrder = 2,
 		FontFace = Font.new(Creator.Font, Enum.FontWeight.SemiBold),
 	})
 
 	local JoinButton = New("TextButton", {
 		Name = "JoinButton",
-		Size = UDim2.new(0, ButtonWidth, 0, 34),
+		Size = UDim2.new(1, -(CopyWidth + (DiscordCard.ShowCopyButton and 8 or 0)), 1, 0),
 		BackgroundTransparency = 1,
 		Text = "",
-		LayoutOrder = 99,
-		Parent = TitleRow,
+		LayoutOrder = 1,
+		Parent = ButtonsRow,
 	}, {
 		JoinFill,
-		JoinLabel,
+		New("Frame", {
+			Name = "Content",
+			Size = UDim2.new(1, 0, 1, 0),
+			BackgroundTransparency = 1,
+		}, {
+			New("UIListLayout", {
+				FillDirection = "Horizontal",
+				HorizontalAlignment = "Center",
+				VerticalAlignment = "Center",
+				SortOrder = "LayoutOrder",
+				Padding = UDim.new(0, 8),
+			}),
+			JoinIcon,
+			JoinLabel,
+		}),
 	})
 
 	Creator.AddSignal(JoinButton.MouseEnter, function()
@@ -292,7 +419,7 @@ function Element:New(Config)
 		local myId = FlashId
 
 		JoinLabel.Text = text
-		Tween(JoinFill, 0.15, { ImageColor3 = ONLINE_GREEN }):Play()
+		Tween(JoinFill, 0.15, { ImageColor3 = BLURPLE }):Play()
 
 		task.delay(2, function()
 			if myId ~= FlashId then
@@ -314,7 +441,7 @@ function Element:New(Config)
 		end)
 	end
 
-	-- COPY LINK BUTTON ----------------------------------------------------
+	-- Copy link button: gray (Discord's secondary button), square.
 	local CopyButton
 	if DiscordCard.ShowCopyButton then
 		local CopyIcon = Creator.Image("link", "link", 0, Config.Window.Folder, "Button", true)
@@ -322,32 +449,29 @@ function Element:New(Config)
 		CopyIcon.AnchorPoint = Vector2.new(0.5, 0.5)
 		CopyIcon.Position = UDim2.new(0.5, 0, 0.5, 0)
 
-		local CopyFill = NewRoundFrame(10, "Squircle", {
+		local CopyFill = NewRoundFrame(8, "Squircle", {
 			Name = "Fill",
-			ThemeTag = {
-				ImageColor3 = "Text",
-			},
-			ImageTransparency = 0.92,
+			ImageColor3 = SECONDARY_GRAY,
 			Size = UDim2.new(1, 0, 1, 0),
 		})
 
 		CopyButton = New("TextButton", {
 			Name = "CopyButton",
-			Size = UDim2.new(0, CopyWidth, 0, 34),
+			Size = UDim2.new(0, CopyWidth, 1, 0),
 			BackgroundTransparency = 1,
 			Text = "",
-			LayoutOrder = 98,
-			Parent = TitleRow,
+			LayoutOrder = 2,
+			Parent = ButtonsRow,
 		}, {
 			CopyFill,
 			CopyIcon,
 		})
 
 		Creator.AddSignal(CopyButton.MouseEnter, function()
-			Tween(CopyFill, 0.1, { ImageTransparency = 0.85 }):Play()
+			Tween(CopyFill, 0.1, { ImageColor3 = SECONDARY_GRAY_HOVER }):Play()
 		end)
 		Creator.AddSignal(CopyButton.MouseLeave, function()
-			Tween(CopyFill, 0.1, { ImageTransparency = 0.92 }):Play()
+			Tween(CopyFill, 0.1, { ImageColor3 = SECONDARY_GRAY }):Play()
 		end)
 		Creator.AddSignal(CopyButton.MouseButton1Click, function()
 			DiscordCard:CopyLink()
@@ -356,6 +480,7 @@ function Element:New(Config)
 
 	DiscordCard.UIElements.IconHolder = IconHolder
 	DiscordCard.UIElements.OnlineDot = OnlineDot
+	DiscordCard.UIElements.ButtonsRow = ButtonsRow
 	DiscordCard.UIElements.JoinButton = JoinButton
 	DiscordCard.UIElements.CopyButton = CopyButton
 
@@ -403,11 +528,161 @@ function Element:New(Config)
 		DiscordCard:Join()
 	end)
 
+	-- IMAGES (the server's real icon and banner) ------------------------------
+	local function BuildIcon(guild)
+		if not guild.icon then
+			return
+		end
+
+		local asset = LoadRemoteImage(
+			("https://cdn.discordapp.com/icons/%s/%s.png?size=256"):format(guild.id, guild.icon),
+			Config.Window.Folder,
+			"icon-" .. tostring(guild.icon)
+		)
+
+		if asset and IconHolder.Parent then
+			New("ImageLabel", {
+				Name = "Icon",
+				Size = UDim2.new(1, 0, 1, 0),
+				BackgroundTransparency = 1,
+				Image = asset,
+				ScaleType = "Crop",
+				Parent = IconHolder,
+			}, {
+				New("UICorner", {
+					CornerRadius = UDim.new(0, IconCorner),
+				}),
+			})
+		end
+	end
+
+	-- Banner: full-bleed at the top of the card, fading into the card background.
+	-- Source order in "auto": profile banner -> invite splash -> server banner ->
+	-- (no image) the server's brand color.
+	local function BuildBanner(guild, profile)
+		if not DiscordCard.ShowBanner then
+			return
+		end
+
+		local id = tostring(guild.id)
+		local candidates = {}
+
+		local function AddBanner(hash)
+			if typeof(hash) == "string" then
+				table.insert(candidates, {
+					url = ("https://cdn.discordapp.com/banners/%s/%s.png?size=600"):format(id, hash),
+					name = "banner-" .. hash,
+				})
+			end
+		end
+		local function AddProfile()
+			AddBanner(profile.custom_banner_hash)
+			AddBanner(profile.banner_hash)
+		end
+		local function AddSplash()
+			if typeof(guild.splash) == "string" then
+				table.insert(candidates, {
+					url = ("https://cdn.discordapp.com/splashes/%s/%s.png?size=600"):format(id, guild.splash),
+					name = "splash-" .. guild.splash,
+				})
+			end
+		end
+		local function AddIcon()
+			if typeof(guild.icon) == "string" then
+				table.insert(candidates, {
+					url = ("https://cdn.discordapp.com/icons/%s/%s.png?size=512"):format(id, guild.icon),
+					name = "iconbanner-" .. guild.icon,
+					dark = true,
+				})
+			end
+		end
+
+		local source = DiscordCard.BannerSource
+		if source == "profile" then
+			AddProfile()
+		elseif source == "banner" then
+			AddBanner(guild.banner)
+		elseif source == "splash" then
+			AddSplash()
+		elseif source == "icon" then
+			AddIcon()
+		else
+			AddProfile()
+			AddSplash()
+			AddBanner(guild.banner)
+		end
+
+		local asset, dark
+		for _, candidate in ipairs(candidates) do
+			asset = LoadRemoteImage(candidate.url, Config.Window.Folder, candidate.name)
+			if asset then
+				dark = candidate.dark
+				break
+			end
+		end
+
+		local brandColor = ParseHexColor(profile.brand_color_primary)
+		if not asset and not brandColor then
+			return
+		end
+		if not Main.Parent then
+			return -- the card was destroyed while the image was downloading
+		end
+
+		local Height = DiscordCard.BannerHeight
+		local Radius = Config.Window.ElementConfig.UICorner
+
+		-- Empty space in the layout, so the info row starts below the banner.
+		New("Frame", {
+			Name = "BannerSpace",
+			Size = UDim2.new(1, 0, 0, math.max(0, Height - Padding)),
+			BackgroundTransparency = 1,
+			LayoutOrder = -1,
+			Parent = Container,
+		})
+
+		-- The image is taller than the visible area: its rounded bottom corners sit
+		-- below the point where the fade is already fully transparent.
+		local ImageHeight = Height + Radius * 2
+		local FadeEnd = Height / ImageHeight
+
+		local Banner = New("ImageLabel", {
+			Name = "Banner",
+			-- The card has inner padding; this cancels it so the banner touches the edges.
+			Position = UDim2.new(0, -Padding, 0, -Padding),
+			Size = UDim2.new(1, Padding * 2, 0, ImageHeight),
+			BackgroundColor3 = brandColor or BLURPLE,
+			BackgroundTransparency = asset and 1 or 0.3,
+			Image = asset or "",
+			ImageColor3 = dark and Color3.fromRGB(140, 140, 140) or Color3.new(1, 1, 1),
+			ScaleType = "Crop",
+			ZIndex = 0, -- always behind the card content
+			Parent = Main,
+		}, {
+			New("UICorner", {
+				CornerRadius = UDim.new(0, Radius),
+			}),
+			New("UIGradient", {
+				Rotation = 90,
+				Transparency = NumberSequence.new({
+					NumberSequenceKeypoint.new(0, 0),
+					NumberSequenceKeypoint.new(FadeEnd * 0.5, 0.1),
+					NumberSequenceKeypoint.new(FadeEnd * 0.8, 0.7),
+					NumberSequenceKeypoint.new(FadeEnd, 1),
+					NumberSequenceKeypoint.new(1, 1),
+				}),
+			}),
+		})
+
+		DiscordCard.UIElements.Banner = Banner
+	end
+
 	-- DATA ----------------------------------------------------------------
 	local BuiltStaticParts = false
 
 	local function ApplyData(data)
 		local guild = data.guild
+		local profile = typeof(data.profile) == "table" and data.profile or {}
 		DiscordCard.Data = data
 
 		StopLoading()
@@ -449,9 +724,21 @@ function Element:New(Config)
 		end
 		BuiltStaticParts = true
 
+		-- "Est. Oct 2024"
+		if DiscordCard.ShowEstablished then
+			local established = EstablishedText(guild.id)
+			if established then
+				EstablishedLabel.Text = established
+				EstablishedLabel.Visible = true
+			end
+		end
+
 		-- Server description
-		if DiscordCard.ShowDescription and typeof(guild.description) == "string" and guild.description ~= "" then
-			DescriptionLabel.Text = Truncate((guild.description:gsub("%s+", " ")), 110)
+		local description = typeof(guild.description) == "string" and guild.description
+			or typeof(profile.description) == "string" and profile.description
+			or ""
+		if DiscordCard.ShowDescription and description ~= "" then
+			DescriptionLabel.Text = Truncate((description:gsub("%s+", " ")), 110)
 			DescriptionLabel.Visible = true
 		end
 
@@ -465,10 +752,10 @@ function Element:New(Config)
 			end
 
 			if HasFeature(guild, "VERIFIED") then
-				AddBadge("Verified", AccentColor)
+				AddBadge("Verified", BLURPLE)
 			end
 			if HasFeature(guild, "PARTNERED") then
-				AddBadge("Partnered", AccentColor)
+				AddBadge("Partnered", BLURPLE)
 			end
 			if HasFeature(guild, "COMMUNITY") then
 				AddBadge("Community", Color3.fromRGB(64, 66, 73))
@@ -480,86 +767,9 @@ function Element:New(Config)
 			end
 		end
 
-		-- Icon
-		if guild.icon then
-			local IconImage = Creator.Image(
-				("https://cdn.discordapp.com/icons/%s/%s.png?size=128"):format(guild.id, guild.icon),
-				"discord-icon-" .. tostring(guild.id),
-				IconCorner,
-				Config.Window.Folder,
-				"Image",
-				false
-			)
-			IconImage.Size = UDim2.new(1, 0, 1, 0)
-			IconImage.Parent = IconHolder
-		end
-
-		-- Banner: full-bleed at the top of the card, fading into the card background
-		if DiscordCard.ShowBanner then
-			local bannerUrl
-			if guild.banner then
-				bannerUrl = ("https://cdn.discordapp.com/banners/%s/%s.png?size=600"):format(guild.id, guild.banner)
-			elseif guild.splash then
-				bannerUrl = ("https://cdn.discordapp.com/splashes/%s/%s.png?size=600"):format(guild.id, guild.splash)
-			end
-
-			if bannerUrl then
-				local Height = DiscordCard.BannerHeight
-
-				-- Empty space in the layout, so the row starts below the banner.
-				local BannerSpace = New("Frame", {
-					Name = "BannerSpace",
-					Size = UDim2.new(1, 0, 0, math.max(0, Height - Padding)),
-					BackgroundTransparency = 1,
-					LayoutOrder = -1,
-					Parent = Frame.UIElements.Container,
-				})
-
-				local Radius = Config.Window.ElementConfig.UICorner
-
-				-- The image is made taller than the visible area: its rounded bottom
-				-- corners sit below the point where the fade is already fully transparent,
-				-- so no ghost corners show up at the sides of the card.
-				local ImageHeight = Height + Radius * 2
-				local FadeEnd = Height / ImageHeight
-
-				local Banner = Creator.Image(
-					bannerUrl,
-					"discord-banner-" .. tostring(guild.id),
-					Radius,
-					Config.Window.Folder,
-					"Banner",
-					false
-				)
-				-- The card has inner padding; this cancels it so the banner touches the edges.
-				Banner.Position = UDim2.new(0, -Padding, 0, -Padding)
-				Banner.Size = UDim2.new(1, Padding * 2, 0, ImageHeight)
-				Banner.ZIndex = 0 -- always behind the card content
-				Banner.Parent = Frame.UIElements.Main
-
-				if Banner:FindFirstChild("ImageLabel") then
-					New("UIGradient", {
-						Rotation = 90,
-						Transparency = NumberSequence.new({
-							NumberSequenceKeypoint.new(0, 0),
-							NumberSequenceKeypoint.new(FadeEnd * 0.5, 0.1),
-							NumberSequenceKeypoint.new(FadeEnd * 0.8, 0.7),
-							NumberSequenceKeypoint.new(FadeEnd, 1),
-							NumberSequenceKeypoint.new(1, 1),
-						}),
-						Parent = Banner.ImageLabel,
-					})
-				end
-
-				-- If the image fails to download, Creator.Image destroys the frame:
-				-- give the reserved space back.
-				Creator.AddSignal(Banner.Destroying, function()
-					BannerSpace:Destroy()
-				end)
-
-				DiscordCard.UIElements.Banner = Banner
-			end
-		end
+		-- Images are downloaded in the background so the text shows up right away.
+		task.spawn(BuildIcon, guild)
+		task.spawn(BuildBanner, guild, profile)
 	end
 
 	function DiscordCard:Refresh()
@@ -594,7 +804,6 @@ function Element:New(Config)
 	if tonumber(Config.RefreshInterval) then
 		task.spawn(function()
 			local interval = math.max(30, tonumber(Config.RefreshInterval))
-			local Main = Frame.UIElements.Main
 
 			while Main.Parent do
 				task.wait(interval)
