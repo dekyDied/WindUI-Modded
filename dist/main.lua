@@ -36084,6 +36084,7 @@ function Element:New(Config)
 		ShowBadges = Config.ShowBadges ~= false,
 		ShowDescription = Config.ShowDescription ~= false,
 		ShowCopyButton = Config.ShowCopyButton ~= false,
+		Highlight = Config.Highlight == true, -- optional: sweep animation when Join is clicked
 		BannerHeight = Config.BannerHeight or 90,
 		IconSize = Config.IconSize or 64,
 		IconShape = ParseIconShape(Config.IconShape),
@@ -36399,6 +36400,13 @@ function Element:New(Config)
 	function DiscordCard:Join()
 		if not DiscordCard.Code then
 			return false
+		end
+
+		-- Optional highlight (the same light sweep the lib uses when you jump to an element).
+		if DiscordCard.Highlight then
+			pcall(function()
+				Frame:Highlight()
+			end)
 		end
 
 		task.spawn(function()
