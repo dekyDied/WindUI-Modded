@@ -36151,7 +36151,7 @@ function Element:New(Config)
 		StatusDotAlways = Config.StatusDotAlways == true,
 		-- tags: Badges = { Verified = false, Boosts = { Title = "{count} Boosts", Color = ... } }
 		Badges = typeof(Config.Badges) == "table" and Config.Badges or {},
-		Highlight = Config.Highlight == true, -- optional: sweep animation when Join is clicked
+		HighlightOnJoin = Config.Highlight == true, -- optional: sweep animation when Join is clicked
 		BannerHeight = Config.BannerHeight or 90,
 		IconSize = Config.IconSize or 64,
 		IconShape = ParseIconShape(Config.IconShape),
@@ -36482,7 +36482,7 @@ function Element:New(Config)
 		end
 
 		-- Optional highlight (the same light sweep the lib uses when you jump to an element).
-		if DiscordCard.Highlight then
+		if DiscordCard.HighlightOnJoin then
 			pcall(function()
 				Frame:Highlight()
 			end)
