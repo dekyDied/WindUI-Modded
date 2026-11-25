@@ -35916,9 +35916,7 @@ local ONLINE_HEX = "#23A55A"
 local MEMBERS_HEX = "#80848E"
 
 local DEFAULT_BUTTON_ICON = "rbxassetid://123235027784147"
-local BUTTON_HEIGHT = 38
-
-local MONTHS = { "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" }
+local BUTTON_HEIGHT = 34
 
 -- Accepts a bare code ("abc123"), "discord.gg/abc123", "dsc.gg/abc123"
 -- or "https://discord.com/invite/abc123" and returns just the code.
@@ -35985,23 +35983,6 @@ local function HasFeature(guild, feature)
 		return false
 	end
 	return table.find(guild.features, feature) ~= nil
-end
-
--- Discord ids are snowflakes: the creation time is stored in the upper bits.
--- Returns something like "Est. Oct 2024".
-local function EstablishedText(id)
-	local number = tonumber(id)
-	if not number then
-		return nil
-	end
-
-	local milliseconds = math.floor(number / 4194304) + 1420070400000
-	local ok, date = pcall(os.date, "!*t", math.floor(milliseconds / 1000))
-	if not ok or typeof(date) ~= "table" or not MONTHS[date.month] then
-		return nil
-	end
-
-	return ("Est. %s %d"):format(MONTHS[date.month], date.year)
 end
 
 -- Asks the public Discord API about the invite (name, icon, banner, member counts, profile).
@@ -36102,10 +36083,9 @@ function Element:New(Config)
 		BannerSource = ParseBannerSource(Config.BannerSource),
 		ShowBadges = Config.ShowBadges ~= false,
 		ShowDescription = Config.ShowDescription ~= false,
-		ShowEstablished = Config.ShowEstablished ~= false,
 		ShowCopyButton = Config.ShowCopyButton ~= false,
-		BannerHeight = Config.BannerHeight or 130,
-		IconSize = Config.IconSize or 48,
+		BannerHeight = Config.BannerHeight or 90,
+		IconSize = Config.IconSize or 64,
 		IconShape = ParseIconShape(Config.IconShape),
 		Callback = Config.Callback or function() end,
 		Data = nil,
@@ -36167,7 +36147,7 @@ function Element:New(Config)
 
 	local OnlineDot = New("Frame", {
 		Name = "OnlineDot",
-		Size = UDim2.new(0, 14, 0, 14),
+		Size = UDim2.new(0, 16, 0, 16),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = UDim2.new(IsCircle and 0.86 or 0.94, 0, IsCircle and 0.86 or 0.94, 0),
 		BackgroundColor3 = ONLINE_GREEN,
@@ -36204,7 +36184,7 @@ function Element:New(Config)
 	-- The text takes whatever space is left next to the icon.
 	TextFrame.Size = UDim2.new(1, -(IconSize + Padding), 1, 0)
 
-	-- Dimmer info lines under the counters ("Est. Oct 2024" and the server description).
+	-- Dimmer info line under the counters (the server description).
 	local function CreateInfoLabel(name, order)
 		return New("TextLabel", {
 			Name = name,
@@ -36226,7 +36206,6 @@ function Element:New(Config)
 		})
 	end
 
-	local EstablishedLabel = CreateInfoLabel("Established", 9)
 	local DescriptionLabel = CreateInfoLabel("ServerDescription", 10)
 
 	-- BUTTONS ROW (full width, Discord style) ------------------------------
@@ -36306,6 +36285,26 @@ function Element:New(Config)
 	Creator.AddSignal(JoinButton.MouseLeave, function()
 		Tween(JoinFill, 0.1, { ImageColor3 = AccentColor }):Play()
 	end)
+
+	-- If the icon asset can't be loaded (wrong id, a Decal id or a private asset),
+	-- swap it for a built-in icon so the button never ends up with an empty gap.
+	if JoinIcon then
+		task.spawn(function()
+			local waited = 0
+			while JoinIcon.Parent and not JoinIcon.IsLoaded and waited < 5 do
+				task.wait(0.25)
+				waited = waited + 0.25
+			end
+
+			if JoinIcon.Parent and not JoinIcon.IsLoaded then
+				local Fallback = Creator.Image("log-in", "log-in", 0, Config.Window.Folder, "Button", false)
+				Fallback.Size = UDim2.new(0, 20, 0, 20)
+				Fallback.LayoutOrder = 1
+				Fallback.Parent = JoinIcon.Parent
+				JoinIcon:Destroy()
+			end
+		end)
+	end
 
 	-- Short feedback on the button after a click ("Copied!" / "Opened!").
 	local FlashId = 0
@@ -36618,15 +36617,6 @@ function Element:New(Config)
 			return
 		end
 		BuiltStaticParts = true
-
-		-- "Est. Oct 2024"
-		if DiscordCard.ShowEstablished then
-			local established = EstablishedText(guild.id)
-			if established then
-				EstablishedLabel.Text = established
-				EstablishedLabel.Visible = true
-			end
-		end
 
 		-- Server description
 		local description = typeof(guild.description) == "string" and guild.description
