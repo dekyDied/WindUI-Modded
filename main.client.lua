@@ -1164,12 +1164,11 @@ do
 		ButtonText = "Join",
 		ShowBanner = true,
 		BannerSource = "Auto", -- Auto, Profile, Banner, Splash or Icon
-		BannerHeight = 130, -- full-width banner at the top of the card
+		BannerHeight = 90, -- full-width banner at the top of the card
 		IconShape = "Rounded", -- Rounded, Circle or Square
-		IconSize = 48,
+		IconSize = 64,
 		ShowBadges = true, -- Verified / Partnered / Community / Boosts
 		ShowDescription = true, -- server description
-		ShowEstablished = true, -- "Est. Oct 2024"
 		ShowCopyButton = true, -- gray "copy link" button next to Join
 		-- ButtonIcon = "rbxassetid://123235027784147", -- icon on the Join button (false = none)
 		-- AccentColor = Color3.fromRGB(36, 128, 70), -- Join button color (default: Discord green)
