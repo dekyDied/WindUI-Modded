@@ -1162,14 +1162,50 @@ do
 	DiscordTab:DiscordCard({
 		Invite = "https://discord.gg/" .. InviteCode, -- or just the code
 		ButtonText = "Join",
+		-- banner
 		ShowBanner = true,
 		BannerSource = "Auto", -- Auto, Profile, Banner, Splash or Icon
 		BannerHeight = 90, -- full-width banner at the top of the card
+
+		-- icon
+		ShowIcon = true,
 		IconShape = "Rounded", -- Rounded, Circle or Square
 		IconSize = 64,
-		ShowBadges = true, -- Verified / Partnered / Community / Boosts
-		ShowDescription = true, -- server description
+
+		-- status dot on the icon
+		ShowStatusDot = true,
+		StatusDotColor = Color3.fromRGB(35, 165, 90),
+		StatusDotSize = 16,
+		StatusDotPosition = "BottomRight", -- BottomRight, BottomLeft, TopRight or TopLeft
+		StatusDotAlways = false, -- true = also show it when nobody is online
+		-- StatusDotRingColor = Color3.fromRGB(24, 24, 28),
+
+		-- counters
+		ShowOnline = true,
+		ShowMembers = true,
+		OnlineFormat = "{count} online", -- {count} is replaced by the number
+		MembersFormat = "{count} members",
+		-- OnlineColor = Color3.fromRGB(35, 165, 90),
+		-- MembersColor = Color3.fromRGB(128, 132, 142),
+		ShowCounterDots = true,
+		ShortNumbers = false, -- true: 2,070 -> 2.1K
+
+		-- tags (badges). ShowBadges = false hides all of them.
+		ShowBadges = true,
+		Badges = {
+			Verified = true, -- false = hide
+			Partnered = true,
+			Community = true,
+			Boosts = { Title = "{count} Boosts", Color = Color3.fromRGB(244, 127, 255) }, -- or a table to restyle
+		},
+		-- you can also add your own tags with the normal Tags option:
+		-- Tags = { { Title = "Official", Color = Color3.fromHex("#30ff6a") } },
+
+		-- text and buttons
+		ShowDescription = true,
+		DescriptionMaxLength = 110,
 		ShowCopyButton = true, -- gray "copy link" button next to Join
+		ButtonHeight = 34,
 		Highlight = true, -- optional: light sweep over the card when Join is clicked
 		-- ButtonIcon = "rbxassetid://123235027784147", -- icon on the Join button (false = none)
 		-- AccentColor = Color3.fromRGB(36, 128, 70), -- Join button color (default: Discord green)
